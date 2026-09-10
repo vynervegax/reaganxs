@@ -1,0 +1,43 @@
+[package]
+name = "reaganxs-desktop"
+version = "0.1.0"
+description = "ReaganXS Desktop – Local GPU video compression + restoration"
+authors = ["Vyner Mano"]
+edition = "2021"
+
+[lib]
+name = "reaganxs_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+# System info
+sysinfo = "0.32"
+
+# Image processing
+image = "0.25"
+
+# Candle (CPU by default – enable cuda feature only if you have CUDA toolkit)
+candle-core = "0.8"
+candle-nn = "0.8"
+
+# Optional: enable later when CUDA is properly installed
+# candle-core = { version = "0.8", features = ["cuda"] }
+# candle-nn = { version = "0.8", features = ["cuda"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

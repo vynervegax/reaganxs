@@ -1,0 +1,15 @@
+FROM node:20-alpine
+FROM jrottenberg/ffmpeg:6.1-ubuntu2204 AS ffmpeg
+FROM node:20-bookworm
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN npm run build
+
+EXPOSE 3001
+
+CMD ["npm", "start"]

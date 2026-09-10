@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.next/
+.open-next/
+.env
+.env.local
+backend/.env
+backend/.env.example
+apps/web/.env.local
+apps/web/.env
+apps/desktop/.env
+backend/models/*.pth
+apps/desktop/src-tauri/models/*.pth
+backend/models/*.safetensors
+backend/models/*.onnx
+backend/models/003_ATD_SRx4_finetune.pth
+apps/desktop/src-tauri/models/003_ATD_SRx4_finetune.pth
+backend/tmp
+# Tauri / Rust
+apps/desktop/src-tauri/target/
+**/src-tauri/target/
+apps/desktop/src-tauri/target/debug
+*.log
+.DS_Store
