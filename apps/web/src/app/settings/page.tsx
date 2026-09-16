@@ -252,7 +252,7 @@ export default function SettingsPage() {
               </p>
               <button
                 type="button"
-                disabled={busy || Boolean(tempActive)}
+                disabled={Boolean(busy || tempActive)}
                 onClick={claimTemp7Days}
                 className="px-5 py-2.5 rounded-2xl border border-amber-500/40 text-amber-100 text-sm hover:bg-amber-500/10 disabled:opacity-40"
               >
