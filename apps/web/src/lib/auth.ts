@@ -1,62 +1,91 @@
-import { MongoDBAdapter } from '@auth/mongodb-adapter';
-import clientPromise from "./db";
-import CredentialsProvider from "next-auth/providers/credentials";
+import type { NextAuthOptions, Session, User } from 'next-auth';
+import type { AdapterUser } from 'next-auth/adapters';
+import type { JWT } from 'next-auth/jwt';
+import CredentialsProvider from 'next-auth/providers/credentials';
 
-export const authOptions = {
-  adapter: MongoDBAdapter(clientPromise),
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(
+  /\/$/,
+  ''
+);
+
+type AppUser = User & {
+  tier?: string;
+  accessToken?: string;
+};
+
+export const authOptions: NextAuthOptions = {
+  session: { strategy: 'jwt' },
+  secret: process.env.NEXTAUTH_SECRET,
+  pages: {
+    signIn: '/login',
+  },
   providers: [
     CredentialsProvider({
-      name: "Credentials",
+      name: 'credentials',
       credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        try {
-          const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: credentials.email,
-              password: credentials.password,
-            }),
-          });
+        const res = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: credentials.email,
+            password: credentials.password,
+          }),
+        });
 
-          const data = await res.json();
+        if (!res.ok) return null;
 
-          if (data.success) {
-            return {
-              id: data.userId || "1",
-              email: credentials.email,
-              tier: data.tier || "free",
-            };
-          }
-          return null;
-        } catch (error) {
-          console.error("Login error:", error);
-          return null;
-        }
-      }
-    })
+        const data = await res.json();
+        if (!data?.token || !data?.user) return null;
+
+        return {
+          id: String(data.user.id),
+          email: data.user.email,
+          name: data.user.name ?? data.user.email,
+          tier: data.user.tier ?? 'free',
+          accessToken: data.token,
+        } as AppUser;
+      },
+    }),
   ],
-  secret: process.env.NEXTAUTH_SECRET,
-  pages: {
-    signIn: "/login",
-  },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt(params: { token: JWT; user?: User | AdapterUser }) {
+      const { token, user } = params;
+
       if (user) {
-        token.tier = user.tier;
+        const u = user as AppUser;
+        token.id = u.id;
+        token.email = u.email;
+        token.tier = u.tier;
+        token.accessToken = u.accessToken;
       }
+
       return token;
     },
-    async session({ session, token }) {
-      if (token) {
-        session.user.tier = token.tier;
-      }
+    async session(params: { session: Session; token: JWT }) {
+      const { session, token } = params;
+
+      session.user = {
+        ...session.user,
+        id: token.id as string | undefined,
+        email: (token.email as string | null | undefined) ?? session.user?.email,
+        name: session.user?.name,
+        tier: token.tier as string | undefined,
+      } as Session['user'];
+
+      (session as Session & { accessToken?: string }).accessToken =
+        token.accessToken as string | undefined;
+
       return session;
     },
   },
 };
+
+export function getApiBase() {
+  return API_BASE;
+}
