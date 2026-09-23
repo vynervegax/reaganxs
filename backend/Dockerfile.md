@@ -1,15 +1,11 @@
-FROM node:20-alpine
-FROM jrottenberg/ffmpeg:6.1-ubuntu2204 AS ffmpeg
-FROM node:20-bookworm
-
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci --only=production
-
+COPY package.json pnpm-lock.yaml* ./
+RUN corepack enable && pnpm install --frozen-lockfile
 COPY . .
-RUN npm run build
-
+RUN pnpm build || npx tsc
+ENV NODE_ENV=production
 EXPOSE 3001
-
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]

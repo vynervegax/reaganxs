@@ -88,4 +88,8 @@ export const authOptions: NextAuthOptions = {
 
 export function getApiBase() {
   return API_BASE;
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 393e67f (chore: bump next to 15.1.11 for Railway CVE gate)
