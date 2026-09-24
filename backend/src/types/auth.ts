@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import type { UserTier } from '../models/User';
+import type { UserTier } from '../config/tiers';
 
 export type AuthUser = {
   id: string;
@@ -7,6 +7,6 @@ export type AuthUser = {
   tier: UserTier;
 };
 
-export interface AuthRequest extends Request {
+export type AuthRequest = Request & {
   user?: AuthUser;
-}
+};

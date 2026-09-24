@@ -19,7 +19,6 @@ router.use('/virality', viralityRoutes);
 router.use('/download', downloadRoutes);
 router.use('/user', userRoutes);
 router.use('/stripe', stripeRoutes);
-
-app.use('/api/temp-premium', tempPremiumRoutes);
+router.use('/temp-premium', tempPremiumRoutes);
 
 export default router;
