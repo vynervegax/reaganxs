@@ -4,59 +4,64 @@ import jwt from 'jsonwebtoken';
 import { User } from '../models/User';
 import { sendVerificationEmail } from '../services/emailService';
 
+const JWT_SECRET = process.env.JWT_SECRET || '';
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+
+function signToken(user: { _id: unknown; email: string; tier: string }) {
+  const id = String(user._id);
+  return jwt.sign({ id, email: user.email, tier: user.tier }, JWT_SECRET, {
+    expiresIn: '7d',
+  });
+}
+
+function publicUser(user: { _id: unknown; email: string; name?: string; tier: string }) {
+  return {
+    id: String(user._id),
+    email: user.email,
+    name: user.name,
+    tier: user.tier,
+  };
+}
+
 export const authController = {
-  // Register new user
   async register(req: Request, res: Response) {
     try {
       const { email, password, name } = req.body;
 
-      // Check if user exists
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         return res.status(400).json({ error: 'User already exists' });
       }
 
-      // Hash password
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
 
-      // Create user with FREE tier by default
       const newUser = await User.create({
         email,
         password: hashedPassword,
         name,
-        tier: 'free',           // ← Important: New users start as FREE
+        tier: 'free',
         verified: false,
       });
 
-      // Send verification email (optional)
-      await sendVerificationEmail(email, newUser._id);
+      const userId = String(newUser._id);
+      const verifyLink = `${FRONTEND_URL}/verify?uid=${encodeURIComponent(userId)}`;
+      await sendVerificationEmail(email, verifyLink);
 
-      // Generate JWT
-      const token = jwt.sign(
-        { id: newUser._id, email: newUser.email, tier: newUser.tier },
-        process.env.JWT_SECRET!,
-        { expiresIn: '7d' }
-      );
+      const token = signToken(newUser as any);
 
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: 'User registered successfully',
         token,
-        user: {
-          id: newUser._id,
-          email: newUser.email,
-          name: newUser.name,
-          tier: newUser.tier,
-        },
+        user: publicUser(newUser as any),
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error(error);
-      res.status(500).json({ error: 'Registration failed' });
+      return res.status(500).json({ error: 'Registration failed' });
     }
   },
 
-  // Login
   async login(req: Request, res: Response) {
     try {
       const { email, password } = req.body;
@@ -71,36 +76,24 @@ export const authController = {
         return res.status(400).json({ error: 'Invalid credentials' });
       }
 
-      const token = jwt.sign(
-        { id: user._id, email: user.email, tier: user.tier },
-        process.env.JWT_SECRET!,
-        { expiresIn: '7d' }
-      );
+      const token = signToken(user as any);
 
-      res.json({
+      return res.json({
         success: true,
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          tier: user.tier,
-        },
+        user: publicUser(user as any),
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error(error);
-      res.status(500).json({ error: 'Login failed' });
+      return res.status(500).json({ error: 'Login failed' });
     }
   },
 
-  // Forgot Password (stub)
   async forgotPassword(req: Request, res: Response) {
-    // Implement with Resend email
-    res.json({ message: 'Password reset link sent' });
+    return res.json({ message: 'Password reset link sent' });
   },
 
-  // Reset Password (stub)
-  async resetPassword(req: Request, res: Response) {
-    res.json({ message: 'Password reset successful' });
+  async resetPassword(_req: Request, res: Response) {
+    return res.json({ message: 'Password reset successful' });
   },
 };
