@@ -11,7 +11,7 @@ COPY package.json pnpm-lock.yaml* ./
 RUN corepack enable && pnpm install --frozen-lockfile || pnpm install
 
 COPY . .
-RUN pnpm exec tsc || npx tsc
+RUN rm -rf dist && pnpm exec tsc
 
 ENV NODE_ENV=production
 EXPOSE 3001
