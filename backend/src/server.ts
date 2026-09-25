@@ -82,20 +82,5 @@ app.use((_req, res) => {
 
 app.use(errorHandler);
 
-export async function startServer() {
-  const port = Number(process.env.PORT) || 3001;
-
-  try {
-    await connectDB();
-    console.log('[db] connected');
-  } catch (err) {
-    console.error('[db] connection failed', err);
-    throw err;
-  }
-
-  app.listen(port, () => {
-    console.log(`[server] ReaganXS API on :${port}`);
-  });
-}
 
 export default app;
