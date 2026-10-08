@@ -8,6 +8,7 @@ import downloadRoutes from './download';
 import userRoutes from './user';
 import stripeRoutes from './stripe';
 import tempPremiumRoutes from './tempPremium';
+import desktopRoutes from './desktop';
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use('/download', downloadRoutes);
 router.use('/user', userRoutes);
 router.use('/stripe', stripeRoutes);
 router.use('/temp-premium', tempPremiumRoutes);
+router.use('/desktop', desktopRoutes);
 
 export default router;

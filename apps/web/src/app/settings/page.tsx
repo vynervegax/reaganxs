@@ -13,6 +13,15 @@ type UserInfo = {
   premiumPaidAt?: string;
 };
 
+type DesktopLinks = {
+  version: string;
+  links: {
+    'mac-arm64': string | null;
+    'mac-x64': string | null;
+    'win-x64': string | null;
+  };
+};
+
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_BACKEND_URL ||
@@ -28,6 +37,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [links, setLinks] = useState<DesktopLinks | null>(null);
 
   const token =
     typeof window !== 'undefined' ? localStorage.getItem('token') : null;
@@ -44,6 +54,7 @@ export default function SettingsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to load profile');
       setUser(data.user);
+      if (data.user) localStorage.setItem('user', JSON.stringify(data.user));
     } catch (e: any) {
       setError(e.message || 'Could not load account');
     } finally {
@@ -51,7 +62,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Load profile + handle Stripe return (?session_id=...)
   useEffect(() => {
     const run = async () => {
       const params = new URLSearchParams(window.location.search);
@@ -86,6 +96,21 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const isPremium = user?.tier === 'premium' || user?.tier === 'desktop';
+
+  useEffect(() => {
+    if (!token || !isPremium) return;
+    fetch(`${API_BASE}/api/desktop/download-links`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setLinks(d);
+        else setError(d.message || 'Desktop download locked');
+      })
+      .catch(() => setError('Could not load desktop downloads'));
+  }, [token, isPremium]);
+
   const payPremium = async () => {
     if (!token) {
       router.push('/login');
@@ -110,7 +135,6 @@ export default function SettingsPage() {
     }
   };
 
-  /** TEMPORARY — remove before production */
   const claimTemp7Days = async () => {
     if (!token) {
       router.push('/login');
@@ -138,11 +162,10 @@ export default function SettingsPage() {
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     router.push('/');
   };
 
-  const isPremium =
-    user?.tier === 'premium' || user?.tier === 'desktop';
   const tempActive =
     isPremium &&
     user?.tempPremiumExpiresAt &&
@@ -174,6 +197,15 @@ export default function SettingsPage() {
     );
   }
 
+  const Btn = ({ href, label }: { href: string; label: string }) => (
+    <a
+      href={href}
+      className="px-5 py-2.5 rounded-2xl font-semibold text-black bg-gradient-to-r from-[#f97316] to-[#c084fc] text-sm"
+    >
+      {label}
+    </a>
+  );
+
   return (
     <main className="min-h-screen bg-[#1c140f] text-white p-8">
       <div className="max-w-2xl mx-auto space-y-8">
@@ -186,7 +218,6 @@ export default function SettingsPage() {
           </Link>
         </div>
 
-        {/* Profile */}
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-3">
           <p className="text-xs text-white/40 uppercase tracking-wide">Profile</p>
           <p className="text-lg font-medium">{user.name || '—'}</p>
@@ -196,8 +227,7 @@ export default function SettingsPage() {
             <span className="font-semibold text-[#c084fc]">{user.tier}</span>
             {tempActive && user.tempPremiumExpiresAt && (
               <span className="text-white/40 text-xs ml-2">
-                (temp until{' '}
-                {new Date(user.tempPremiumExpiresAt).toLocaleString()})
+                (temp until {new Date(user.tempPremiumExpiresAt).toLocaleString()})
               </span>
             )}
             {user.premiumPaidAt && (
@@ -206,32 +236,22 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        {/* Premium */}
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4">
           <h2 className="text-xl font-semibold">Premium — $2.99</h2>
           <p className="text-sm text-white/60 leading-relaxed">
             One payment unlocks the <strong className="text-white">Desktop app</strong> and
-            the <strong className="text-white">Community models</strong> page
-            (contribute & access custom models).
+            the <strong className="text-white">Community models</strong> page.
           </p>
 
-          {isPremium && user.premiumPaidAt ? (
+          {isPremium ? (
             <div className="space-y-3">
               <p className="text-sm text-emerald-300">Premium active</p>
-              <div className="flex flex-wrap gap-3">
-                <Link
-                  href="/community-models"
-                  className="px-5 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-sm"
-                >
-                  Community models
-                </Link>
-                <a
-                  href="#desktop"
-                  className="px-5 py-2.5 rounded-2xl border border-white/15 text-sm text-white/70"
-                >
-                  Desktop download (link your build)
-                </a>
-              </div>
+              <Link
+                href="/community-models"
+                className="inline-flex px-5 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-sm"
+              >
+                Community models
+              </Link>
             </div>
           ) : (
             <button
@@ -244,7 +264,6 @@ export default function SettingsPage() {
             </button>
           )}
 
-          {/* TEMPORARY testing button — remove before production */}
           {!user.premiumPaidAt && (
             <div className="pt-4 border-t border-white/10 space-y-2">
               <p className="text-xs text-amber-200/80">
@@ -256,13 +275,32 @@ export default function SettingsPage() {
                 onClick={claimTemp7Days}
                 className="px-5 py-2.5 rounded-2xl border border-amber-500/40 text-amber-100 text-sm hover:bg-amber-500/10 disabled:opacity-40"
               >
-                {tempActive
-                  ? 'Temp Premium active'
-                  : 'Claim 7-day Premium (test)'}
+                {tempActive ? 'Temp Premium active' : 'Claim 7-day Premium (test)'}
               </button>
             </div>
           )}
         </div>
+
+        {isPremium && (
+          <div id="desktop" className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-xl font-semibold">Download ReaganXS Desktop</h2>
+            <p className="text-sm text-white/60">
+              Version {links?.version || '0.1.0'}. Apple Silicon build is live.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {links?.links['mac-arm64'] && (
+                <Btn href={links.links['mac-arm64']} label="macOS Apple Silicon" />
+              )}
+              {links?.links['mac-x64'] && (
+                <Btn href={links.links['mac-x64']} label="macOS Intel" />
+              )}
+              {links?.links['win-x64'] && (
+                <Btn href={links.links['win-x64']} label="Windows" />
+              )}
+            </div>
+            {!links && <p className="text-sm text-white/40">Loading installers…</p>}
+          </div>
+        )}
 
         {message && (
           <div className="text-sm text-emerald-300 bg-emerald-900/20 border border-emerald-700/40 rounded-2xl p-4">

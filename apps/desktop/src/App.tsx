@@ -4,8 +4,7 @@ import ProgressBar from './components/ProgressBar';
 import ModelSelector from './components/ModelSelector';
 import HardwareInfo from './components/HardwareInfo';
 import SettingsPanel from './components/SettingsPanel';
-import BeforeAfter from './components/BeforeAfter';
-import RestoreStatus from './components/RestoreStatus';
+import SavingsCard from './components/SavingsCard';
 import { tauriApi, type ProcessResult } from './lib/tauriApi';
 
 export default function App() {
@@ -23,7 +22,7 @@ export default function App() {
   useEffect(() => {
     tauriApi
       .getModelStatus?.()
-      .then((s: any) =>
+      .then((s) =>
         setModelStatus({ loaded: !!s?.loaded, name: s?.name ?? null })
       )
       .catch(() => setModelStatus({ loaded: false }));
@@ -42,9 +41,9 @@ export default function App() {
       setProgress(100);
       setStage('complete');
       setResult(res);
-      setError(null);
-    } catch (e: any) {
-      setError(e?.message || String(e) || 'Processing failed');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || 'Processing failed');
       setResult(null);
       setStage('error');
     } finally {
@@ -97,8 +96,8 @@ export default function App() {
           </span>
         </div>
 
-        {!result && !isProcessing && (
-          <UploadZone onUpload={handleUpload} isProcessing={isProcessing} />
+        {!result && (
+          <UploadZone onUpload={handleUpload} disabled={isProcessing} />
         )}
 
         {isProcessing && (
@@ -123,51 +122,34 @@ export default function App() {
           <div className="space-y-6">
             <div className="rounded-3xl border border-[#c084fc]/35 bg-gradient-to-br from-[#c084fc]/15 via-transparent to-[#f97316]/10 p-5">
               <p className="text-[#c084fc] font-medium text-sm">Processing complete</p>
-              <p className="text-xs text-white/50 mt-1">{result.message}</p>
+              <p className="text-xs text-white/50 mt-1">
+                {result.message ||
+                  (result.did_restore || result.restored
+                    ? 'Compressed and restored'
+                    : 'Compressed. Restoration skipped or not beneficial.')}
+              </p>
             </div>
 
             <div className="grid sm:grid-cols-3 gap-4">
-              {[
-                { label: 'Codec', value: result.codec },
-                {
-                  label: 'Savings',
-                  value: `${result.savings_percent}%`,
-                  accent: true,
-                },
-                { label: 'Output', value: result.output_path, mono: true },
-              ].map((card) => (
-                <div
-                  key={card.label}
-                  className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4 backdrop-blur-md"
-                >
-                  <p className="text-xs text-[#c084fc]/70 mb-1">{card.label}</p>
-                  <p
-                    className={`${
-                      card.accent
-                        ? 'font-semibold text-transparent bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text'
-                        : card.mono
-                        ? 'font-mono text-xs break-all text-white/70'
-                        : 'font-medium'
-                    }`}
-                  >
-                    {card.value}
-                  </p>
-                </div>
-              ))}
+              <div className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4">
+                <p className="text-xs text-[#c084fc]/70 mb-1">Codec</p>
+                <p className="font-medium">{result.codec || 'svt-av1 / vp9'}</p>
+              </div>
+              <div className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4">
+                <p className="text-xs text-[#c084fc]/70 mb-1">Savings</p>
+                <p className="font-semibold text-transparent bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text">
+                  {result.savings_percent}%
+                </p>
+              </div>
+              <div className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4">
+                <p className="text-xs text-[#c084fc]/70 mb-1">Output</p>
+                <p className="font-mono text-xs break-all text-white/70">
+                  {result.output_path}
+                </p>
+              </div>
             </div>
 
-            <RestoreStatus
-              restored={result.restored}
-              modelUsed={result.model_used}
-              modelLoaded={result.model_loaded}
-              restoreSkippedReason={result.restore_skipped_reason}
-              stages={result.stages}
-            />
-
-            <BeforeAfter
-              originalSize={result.original_size}
-              finalSize={result.final_size}
-            />
+            <SavingsCard result={result} />
 
             <button
               type="button"

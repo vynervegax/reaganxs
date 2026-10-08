@@ -11,31 +11,41 @@ interface GpuMem {
 
 export default function GpuMemoryInfo() {
   const [info, setInfo] = useState<GpuMem | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
+    let alive = true;
+
     const load = async () => {
       try {
         const data = await tauriApi.getGpuMemoryInfo();
+        if (!alive) return;
         setInfo(data);
-      } catch {
-        // silent
+        setError('');
+      } catch (err) {
+        if (!alive) return;
+        setError(err instanceof Error ? err.message : 'GPU info unavailable');
       }
     };
-    load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
+
+    void load();
+    const id = setInterval(() => void load(), 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, []);
 
   if (!info) {
     return (
       <div className="glass rounded-2xl p-5 text-sm text-zinc-500">
-        GPU memory...
+        {error || 'GPU memory...'}
       </div>
     );
   }
 
   const usedPct = info.total_vram_mb
-    ? Math.round((info.used_vram_mb / info.total_vram_mb) * 100)
+    ? Math.min(100, Math.round((info.used_vram_mb / info.total_vram_mb) * 100))
     : 0;
 
   return (
@@ -65,6 +75,7 @@ export default function GpuMemoryInfo() {
           Low VRAM — batch size will be reduced
         </p>
       )}
+      {error && <p className="text-xs text-zinc-500">{error}</p>}
     </div>
   );
 }

@@ -3,35 +3,62 @@ import { invoke } from '@tauri-apps/api/core';
 export type ProcessResult = {
   output_path: string;
   savings_percent: number;
-  model_used: string;
-  codec: string;
   original_size: number;
   final_size: number;
-  message: string;
-  model_loaded: boolean;
-  model_name?: string | null;
-  restored: boolean;
-  restore_skipped_reason?: string | null;
-  stages: string[];
+  model_used: string;
+  did_restore: boolean;
+  codec?: string;
+  vmaf?: number | null;
+  message?: string;
+  restored?: boolean;
+  model_loaded?: boolean;
+  restore_skipped_reason?: string;
+  stages?: string[];
+};
+
+export type HardwareInfo = {
+  cpu: string;
+  total_memory_mb: number;
+  available_memory_mb: number;
+  gpu?: string;
+};
+
+export type GpuMemoryInfo = {
+  total_vram_mb: number;
+  used_vram_mb: number;
+  available_vram_mb: number;
+  device_type: string;
+  is_low_memory: boolean;
 };
 
 export const tauriApi = {
-  processVideo(inputPath: string, model?: string) {
-    return invoke<ProcessResult>('process_video', {
-      inputPath,
-      model: model ?? null,
-    });
+  processVideo(inputPath: string, model = 'atd-srx4'): Promise<ProcessResult> {
+    return invoke('process_video', { inputPath, modelName: model });
   },
 
-  loadModel(modelName: string) {
-    return invoke<string>('load_model', { modelName });
+  loadModel(modelName: string): Promise<string> {
+    return invoke('load_model', { modelName });
   },
 
-  getModelStatus() {
-    return invoke<{ loaded: boolean; name?: string | null }>('get_model_status');
+  getModelStatus(): Promise<{ loaded: boolean; name?: string }> {
+    return invoke('get_model_status');
   },
 
-  getHardwareInfo() {
+  getHardwareInfo(): Promise<HardwareInfo> {
     return invoke('get_hardware_info');
+  },
+
+  getGpuMemoryInfo(): Promise<GpuMemoryInfo> {
+    return invoke('get_gpu_memory_info');
+  },
+
+  async pickVideo(): Promise<string | null> {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm'] }],
+    });
+    if (typeof selected === 'string') return selected;
+    return null;
   },
 };

@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 const LABELS: Record<string, string> = {
   '4x-bhi': '4x BHI RealPLKSR',
   '4x-purephoto': '4x PurePhoto RealPLSKR',
+  '4x-purephoto-realplksr': '4x PurePhoto RealPLSKR',
   'rgt-s': 'RGT-S x4',
   'atd-srx4': 'ATD SRx4 Finetune',
   'compression-only': 'Compression only',
@@ -15,15 +16,20 @@ type Result = {
   savingsPercent?: number;
   model_used?: string;
   modelUsed?: string;
+  did_restore?: boolean;
   restored?: boolean;
   restore_mode?: string;
   restoreMode?: string;
   vmaf_score?: number | null;
   vmafScore?: number | null;
+  vmaf?: number | null;
   original_size?: number;
   final_size?: number;
   codec?: string;
+  message?: string;
+  model_loaded?: boolean;
   restore_skipped_reason?: string;
+  stages?: string[];
   preview_frames?: string[];
   previewFrames?: string[];
   preview_clip_url?: string | null;
@@ -47,13 +53,13 @@ export default function SavingsCard({ result }: { result: Result | null }) {
   const model = result.model_used || result.modelUsed || 'compression-only';
   const label = LABELS[model] || model;
   const path = result.output_path || result.url || '';
-  const vmafRaw = result.vmaf_score ?? result.vmafScore;
+  const vmafRaw = result.vmaf_score ?? result.vmafScore ?? result.vmaf;
   const vmaf =
     typeof vmafRaw === 'number' && !Number.isNaN(vmafRaw) ? vmafRaw : null;
-  const restoreMode = result.restore_mode || result.restoreMode || 'none';
+  const restored = result.restored ?? result.did_restore ?? false;
+  const restoreMode = result.restore_mode || result.restoreMode || (restored ? 'full' : 'none');
   const frames = result.preview_frames || result.previewFrames || [];
-  const previewClip =
-    result.preview_clip_url || result.previewClipUrl || null;
+  const previewClip = result.preview_clip_url || result.previewClipUrl || null;
 
   const onDownloadCardImage = async (format: 'png' | 'jpeg' = 'png') => {
     const el = cardRef.current;
@@ -75,8 +81,8 @@ export default function SavingsCard({ result }: { result: Result | null }) {
       a.download = `reaganxs-savings-${Date.now()}.${format === 'jpeg' ? 'jpg' : 'png'}`;
       a.click();
       setMsg(`Card saved as ${format.toUpperCase()}`);
-    } catch (e: any) {
-      setMsg(e?.message || 'Export failed');
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : 'Export failed');
     } finally {
       setBusy(false);
     }
@@ -100,9 +106,7 @@ export default function SavingsCard({ result }: { result: Result | null }) {
           <div>
             <p className="text-xs text-white/40 mb-1">VMAF</p>
             {vmaf != null ? (
-              <p className="text-3xl font-bold text-[#c084fc]">
-                {vmaf.toFixed(2)}
-              </p>
+              <p className="text-3xl font-bold text-[#c084fc]">{vmaf.toFixed(2)}</p>
             ) : (
               <p className="text-sm text-white/40 pt-2">—</p>
             )}
@@ -113,17 +117,22 @@ export default function SavingsCard({ result }: { result: Result | null }) {
           </div>
         </div>
 
-        {(result.original_size || result.final_size) && (
-          <p className="text-xs text-white/45">
-            {formatBytes(result.original_size)} →{' '}
-            {formatBytes(result.final_size)}
-          </p>
+        <p className="text-xs text-white/45">
+          {formatBytes(result.original_size)} → {formatBytes(result.final_size)}
+          {result.codec ? ` · ${result.codec}` : ''}
+        </p>
+
+        <p className="text-sm text-white/70">
+          {restored ? 'Restoration applied' : 'Compression only'}
+          {result.model_loaded === false ? ' · model not loaded' : ''}
+        </p>
+
+        {!restored && result.restore_skipped_reason && (
+          <p className="text-xs text-amber-200/80">{result.restore_skipped_reason}</p>
         )}
 
-        {result.restored === false && result.restore_skipped_reason && (
-          <p className="text-xs text-amber-200/80">
-            {result.restore_skipped_reason}
-          </p>
+        {result.stages && result.stages.length > 0 && (
+          <p className="text-xs text-white/40">{result.stages.join(' → ')}</p>
         )}
 
         {restoreMode === 'partial-frames' && frames.length > 0 && (
@@ -143,18 +152,7 @@ export default function SavingsCard({ result }: { result: Result | null }) {
 
       <div className="flex flex-wrap gap-3">
         {path && (
-          <a
-            href={path.startsWith('http') ? path : undefined}
-            onClick={(e) => {
-              if (!path.startsWith('http')) {
-                e.preventDefault();
-                // Tauri: open(path) via tauriApi if you prefer
-              }
-            }}
-            className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"
-          >
-            Open / download video
-          </a>
+          <p className="w-full break-all text-xs text-[#c084fc]">{path}</p>
         )}
         <button
           type="button"
@@ -174,12 +172,7 @@ export default function SavingsCard({ result }: { result: Result | null }) {
         </button>
       </div>
       {previewClip && (
-        <a
-          href={previewClip}
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm text-[#c084fc] underline"
-        >
+        <a href={previewClip} target="_blank" rel="noreferrer" className="text-sm text-[#c084fc] underline">
           Quality sample clip
         </a>
       )}
