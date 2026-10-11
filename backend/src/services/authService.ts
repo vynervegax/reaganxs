@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { User, IUser } from '../models/User';
 import { JWT_SECRET, JWT_EXPIRES_IN } from '../config/constants';
 import type { UserTier } from '../config/tiers';
+import { sendPasswordResetEmail } from './emailService';
 
 export type AuthTokenPayload = {
   id: string;
@@ -112,28 +113,34 @@ export const authService = {
   },
 
   async forgotPassword(email: string) {
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-    // Always same shape (no email enumeration)
-    if (!user) {
-      return {
-        success: true,
-        message: 'If that email exists, a reset link was sent',
-      };
-    }
-
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const hashed = crypto.createHash('sha256').update(rawToken).digest('hex');
-    user.resetPasswordToken = hashed;
-    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1h
-    await user.save();
-
-    // TODO: send email via Resend with rawToken
+  const user = await User.findOne({ email: email.toLowerCase().trim() });
+  if (!user) {
     return {
       success: true,
       message: 'If that email exists, a reset link was sent',
-      ...(process.env.NODE_ENV !== 'production' ? { resetToken: rawToken } : {}),
     };
-  },
+  }
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const hashed = crypto.createHash('sha256').update(rawToken).digest('hex');
+  user.resetPasswordToken = hashed;
+  user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000);
+  await user.save();
+
+  const frontend = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const resetLink = `${frontend}/reset-password?token=${rawToken}`;
+
+  const { sent } = await sendPasswordResetEmail(user.email, resetLink);
+  if (!sent) {
+    console.warn('[forgotPassword] email not sent (missing RESEND_API_KEY?)');
+  }
+
+  return {
+    success: true,
+    message: 'If that email exists, a reset link was sent',
+    ...(process.env.NODE_ENV !== 'production' ? { resetToken: rawToken } : {}),
+  };
+},
 
   async resetPassword(token: string, newPassword: string) {
     const hashed = crypto.createHash('sha256').update(token).digest('hex');
