@@ -81,7 +81,7 @@ export default function SettingsPage() {
           const data = await res.json();
           if (!res.ok) throw new Error(data.message || 'Payment confirm failed');
           if (data.token) localStorage.setItem('token', data.token);
-          setMessage('Payment successful — Premium unlocked (Desktop + Community)');
+          setMessage('Subscription started — Premium unlocked (Desktop + Community)');
           window.history.replaceState({}, '', '/settings');
         } catch (e: any) {
           setError(e.message || 'Could not confirm payment');
@@ -155,6 +155,28 @@ export default function SettingsPage() {
       await loadUser();
     } catch (e: any) {
       setError(e.message || 'Claim failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelSub = async () => {
+    if (!token) return;
+    if (!confirm('Cancel Premium at the end of this billing period?')) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/stripe/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Cancel failed');
+      setMessage(data.message || 'Subscription will end at period close');
+      await loadUser();
+    } catch (e: any) {
+      setError(e.message || 'Cancel failed');
     } finally {
       setBusy(false);
     }
@@ -237,21 +259,33 @@ export default function SettingsPage() {
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4">
-          <h2 className="text-xl font-semibold">Premium — $2.99</h2>
+          <h2 className="text-xl font-semibold">Premium — $2.99 / month</h2>
           <p className="text-sm text-white/60 leading-relaxed">
-            One payment unlocks the <strong className="text-white">Desktop app</strong> and
+            Subscription unlocks the <strong className="text-white">Desktop app</strong> and
             the <strong className="text-white">Community models</strong> page.
           </p>
 
           {isPremium ? (
             <div className="space-y-3">
               <p className="text-sm text-emerald-300">Premium active</p>
-              <Link
-                href="/community-models"
-                className="inline-flex px-5 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-sm"
-              >
-                Community models
-              </Link>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  href="/community-models"
+                  className="inline-flex px-5 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-sm"
+                >
+                  Community models
+                </Link>
+                {user.premiumPaidAt && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={cancelSub}
+                    className="px-5 py-2.5 rounded-2xl border border-red-400/40 text-red-200 text-sm hover:bg-red-500/10 disabled:opacity-40"
+                  >
+                    Cancel subscription
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <button
@@ -260,7 +294,7 @@ export default function SettingsPage() {
               onClick={payPremium}
               className="px-6 py-3 rounded-2xl font-semibold text-black bg-gradient-to-r from-[#f97316] to-[#c084fc] disabled:opacity-50"
             >
-              {busy ? 'Please wait…' : 'Pay $2.99 — Desktop + Community'}
+              {busy ? 'Please wait…' : 'Subscribe $2.99 — Desktop + Community'}
             </button>
           )}
 

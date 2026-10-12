@@ -10,12 +10,8 @@ let stripeClient: Stripe | null = null;
 
 function getStripe(): Stripe {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) {
-    throw new Error('STRIPE_SECRET_KEY is not set');
-  }
-  if (!stripeClient) {
-    stripeClient = new Stripe(key);
-  }
+  if (!key) throw new Error('STRIPE_SECRET_KEY is not set');
+  if (!stripeClient) stripeClient = new Stripe(key);
   return stripeClient;
 }
 
@@ -38,6 +34,8 @@ export const stripeService = {
 
     const priceId = process.env.STRIPE_PRICE_ID;
 
+    // Prefer a recurring Price from the Dashboard.
+    // Fallback only if STRIPE_PRICE_ID is missing.
     const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = priceId
       ? [{ price: priceId, quantity: 1 }]
       : [
@@ -45,9 +43,10 @@ export const stripeService = {
             price_data: {
               currency: 'usd',
               unit_amount: 299,
+              recurring: { interval: 'month' },
               product_data: {
                 name: 'ReaganXS Premium',
-                description: 'Desktop access + community models ($2.99)',
+                description: 'Desktop access + community models ($2.99/month)',
               },
             },
             quantity: 1,
@@ -55,7 +54,7 @@ export const stripeService = {
         ];
 
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
+      mode: 'subscription',
       customer: customerId,
       line_items: lineItems,
       success_url: `${FRONTEND_URL}/settings?session_id={CHECKOUT_SESSION_ID}`,
@@ -66,12 +65,15 @@ export const stripeService = {
     return { url: session.url, sessionId: session.id };
   },
 
-  async activatePremium(userId: string) {
+  async activatePremium(userId: string, subscriptionId?: string) {
     const user = await User.findById(userId);
     if (!user) throw new Error('User not found');
     user.tier = 'premium';
     (user as any).tempPremiumExpiresAt = undefined;
     (user as any).premiumPaidAt = new Date();
+    if (subscriptionId) {
+      (user as any).stripeSubscriptionId = subscriptionId;
+    }
     await user.save();
     return user;
   },
@@ -79,11 +81,38 @@ export const stripeService = {
   async confirmSessionAndActivate(sessionId: string) {
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    if (session.payment_status !== 'paid') {
+    // First invoice of a subscription is still 'paid'
+    if (session.status !== 'complete' && session.payment_status !== 'paid') {
       throw new Error('Payment not completed');
     }
     const userId = session.metadata?.userId;
     if (!userId) throw new Error('Missing userId on session');
-    return this.activatePremium(userId);
+    const subId =
+      typeof session.subscription === 'string'
+        ? session.subscription
+        : session.subscription?.id;
+    return this.activatePremium(userId, subId);
+  },
+
+  async cancelSubscription(userId: string) {
+  const stripe = getStripe();
+  const user = await User.findById(userId);
+  if (!user) throw new Error('User not found');
+
+  const subId = (user as any).stripeSubscriptionId as string | undefined;
+  if (!subId) throw new Error('No active subscription');
+
+  const sub = await stripe.subscriptions.update(subId, {
+    cancel_at_period_end: true,
+  });
+
+  (user as any).cancelAtPeriodEnd = true;
+  await user.save();
+
+  return {
+    cancelAt: sub.cancel_at
+      ? new Date(sub.cancel_at * 1000)
+      : null,
+   };
   },
 };

@@ -60,6 +60,30 @@ router.post(
   }
 );
 
+
+// POST /api/stripe/cancel
+router.post(
+  '/cancel',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const result = await stripeService.cancelSubscription(String(userId));
+      return res.json({
+        success: true,
+        message: 'Subscription will end at the close of the current period',
+        cancelAt: result.cancelAt,
+      });
+    } catch (e: any) {
+      return res.status(400).json({ success: false, message: e.message });
+    }
+  }
+);
+
+
 /**
  * TEMPORARY — 7-day premium for testing.
  * Remove this route before production launch.
