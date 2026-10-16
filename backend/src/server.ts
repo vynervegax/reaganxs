@@ -36,14 +36,47 @@ app.use(
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-const apiLimiter = rateLimit({
+// --- Rate limits ---
+const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Upload limit reached. Try again later.' },
+  keyGenerator: (req) => (req as any).user?.id || req.ip,
+});
+
+const statusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many status checks.' },
+  keyGenerator: (req) => (req as any).user?.id || req.ip,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many auth attempts.' },
+});
+
+const defaultLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 150,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests' },
+  keyGenerator: (req) => (req as any).user?.id || req.ip,
 });
-app.use('/api/', apiLimiter);
+
+// Specific routes first
+app.use('/api/process', uploadLimiter);
+app.get('/api/process/:id', statusLimiter);
+app.use('/api/auth', authLimiter);
+app.use('/api/', defaultLimiter);
 
 const outputsDir = path.join(process.cwd(), 'tmp', 'outputs');
 fs.mkdirSync(outputsDir, { recursive: true });
@@ -81,6 +114,5 @@ app.use((_req, res) => {
 });
 
 app.use(errorHandler);
-
 
 export default app;
