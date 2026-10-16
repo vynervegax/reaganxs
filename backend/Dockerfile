@@ -11,6 +11,7 @@ COPY package.json pnpm-lock.yaml* ./
 
 RUN corepack enable && \
     pnpm config set ignore-scripts false && \
+    pnpm approve-builds msgpackr-extract && \
     pnpm install
 
 COPY . .

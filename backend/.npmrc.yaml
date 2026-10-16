@@ -1,0 +1,2 @@
+ignore-scripts=false
+onlyBuiltDependencies[]=msgpackr-extract
