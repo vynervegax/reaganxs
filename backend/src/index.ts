@@ -4,6 +4,7 @@ dotenv.config();
 import app from './server';
 import { connectDB } from './config/db';
 import { startCleanupJobs } from './utils/cleanup';
+import './workers/videoWorker';
 
 const raw = process.env.PORT;
 const port = Number(raw);

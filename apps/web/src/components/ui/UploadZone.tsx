@@ -58,7 +58,7 @@ export default function UploadZone({
     async (file: File) => {
       setError(null);
       setUploading(true);
-      setProgress(10);
+      setProgress(5);
       setStatus('Preparing…');
 
       abortRef.current?.abort();
@@ -83,7 +83,7 @@ export default function UploadZone({
           headers.Authorization = `Bearer ${token}`;
         }
 
-        setProgress(25);
+        setProgress(15);
         setStatus('Uploading…');
 
         const res = await resilientFetch(`${API_BASE}/api/process`, {
@@ -95,7 +95,7 @@ export default function UploadZone({
           baseDelayMs: 1500,
           maxDelayMs: 15000,
           onRetry: ({ attempt, retriesLeft, waitingForOnline }) => {
-            setProgress((p) => Math.min(70, p + 5));
+            setProgress((p) => Math.min(30, p + 3));
             setStatus(
               waitingForOnline
                 ? 'Network offline — waiting to reconnect…'
@@ -104,41 +104,54 @@ export default function UploadZone({
           },
         });
 
-        setProgress(85);
-        setStatus('Finishing…');
-
         const data = await res.json().catch(() => ({} as any));
-
         if (!res.ok || data.success === false) {
-          throw new Error(
-            data.message || `Upload failed (${res.status} ${res.statusText})`
-          );
+          throw new Error(data.message || `Upload failed (${res.status})`);
         }
 
-        setProgress(100);
-        setStatus('Done');
+        const jobId = data.jobId;
+        setStatus('Queued…');
+        setProgress(20);
 
-        const restored = Boolean(data.restored ?? data.didRestore);
+        const poll = async (): Promise<void> => {
+          const r = await fetch(`${API_BASE}/api/process/${jobId}`);
+          const d = await r.json();
+          if (!r.ok || !d.job) {
+            throw new Error(d.message || 'Status check failed');
+          }
 
-        onUploadComplete({
-          url: data.url,
-          savingsPercent: data.savingsPercent ?? 0,
-          modelUsed: data.modelUsed,
-          didRestore: restored,
-          restored,
-          shouldRestore: data.shouldRestore,
-          restoreSkippedReason: data.restoreSkippedReason ?? data.reason,
-          reason: data.reason,
-          originalSize: data.originalSize ?? file.size,
-          finalSize: data.finalSize,
-          compressedSize: data.compressedSize,
-          codec: data.codec,
-          tier: data.tier || tier,
-          isDemo: data.isDemo ?? !isLoggedIn,
-          vmafScore: data.vmafScore,
-          expiryHours: data.expiryHours,
-          stages: data.stages,
-        });
+          const j = d.job;
+          setProgress(j.progress || 20);
+          setStatus(j.status || 'Processing…');
+
+          if (j.status === 'completed') {
+            setProgress(100);
+            setStatus('Done');
+            onUploadComplete({
+              url: j.finalUrl,
+              savingsPercent: j.savingsPercent ?? 0,
+              modelUsed: j.modelUsed,
+              didRestore: Boolean(j.didRestore ?? j.restored),
+              restored: Boolean(j.restored ?? j.didRestore),
+              originalSize: j.originalSize ?? file.size,
+              finalSize: j.finalSize,
+              codec: j.codec,
+              tier: tier,
+              isDemo: !isLoggedIn,
+              vmafScore: j.vmafScore,
+            });
+            return;
+          }
+
+          if (j.status === 'failed') {
+            throw new Error(j.error || 'Processing failed');
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          return poll();
+        };
+
+        await poll();
       } catch (err: any) {
         if (err?.name === 'AbortError') {
           setError('Cancelled');
@@ -202,9 +215,7 @@ export default function UploadZone({
                 style={{ width: `${progress}%` }}
               />
             </div>
-            {status && (
-              <p className="text-xs text-white/50">{status}</p>
-            )}
+            {status && <p className="text-xs text-white/50">{status}</p>}
           </div>
         )}
       </div>
@@ -215,7 +226,9 @@ export default function UploadZone({
         </div>
       )}
 
-      <p className="text-[11px] text-white/30 text-center">Restorative Encoder Applying Generative AI for Near-Lossless Sequences (REAGANXS)</p>
+      <p className="text-[11px] text-white/30 text-center">
+        Restorative Encoder Applying Generative AI for Near-Lossless Sequences (REAGANXS)
+      </p>
     </div>
   );
 }

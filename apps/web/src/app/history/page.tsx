@@ -1,5 +1,4 @@
 //history
-
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -16,6 +15,8 @@ interface HistoryItem {
   createdAt: string;
   expiresAt?: string;
   status?: string;
+  progress?: number;
+  error?: string;
 }
 
 export default function HistoryPage() {
@@ -124,6 +125,10 @@ export default function HistoryPage() {
             {filteredHistory.map((item) => {
               const downloadUrl = getDownloadUrl(item);
               const expired = isExpired(item.expiresAt);
+              const isProcessing =
+                item.status &&
+                item.status !== 'completed' &&
+                item.status !== 'failed';
 
               return (
                 <div
@@ -145,13 +150,26 @@ export default function HistoryPage() {
                     </p>
                     <p className="text-xs text-gray-500 mt-1">
                       {new Date(item.createdAt).toLocaleString()}
+                      {item.status && item.status !== 'completed' && (
+                        <span className="ml-2 text-[#c084fc]">
+                          · {item.status}
+                          {item.progress != null ? ` (${item.progress}%)` : ''}
+                        </span>
+                      )}
                     </p>
+                    {item.error && (
+                      <p className="text-xs text-red-400 mt-1">{item.error}</p>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3">
                     {expired ? (
                       <span className="text-red-400 text-sm font-medium px-4 py-2 bg-red-500/10 rounded-xl">
                         Expired
+                      </span>
+                    ) : isProcessing ? (
+                      <span className="text-[#c084fc] text-sm px-4 py-2 bg-[#c084fc]/10 rounded-xl">
+                        {item.status}
                       </span>
                     ) : downloadUrl ? (
                       <a

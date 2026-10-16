@@ -24,18 +24,15 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
-/**
- * Demo + logged-in share the same endpoint.
- * - No token → tier demo (Real-ESRGAN)
- * - Token → free / premium / desktop from JWT
- */
 router.post(
   '/',
-  optionalAuthenticate, // ← not authenticate
-  tierGuard('demo'),    // allows demo (rank 0)
+  optionalAuthenticate,
+  tierGuard('demo'),
   upload.single('video'),
   validateFileMiddleware,
   processController.processVideo
 );
+
+router.get('/:id', processController.getJobStatus);
 
 export default router;
