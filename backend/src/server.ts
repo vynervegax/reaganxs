@@ -72,10 +72,16 @@ const defaultLimiter = rateLimit({
   keyGenerator: (req) => (req as any).user?.id || req.ip,
 });
 
-// Specific routes first
-app.use('/api/process', uploadLimiter);
+// Status polling (higher limit) — register first
 app.get('/api/process/:id', statusLimiter);
+
+// Uploads only (POST)
+app.post('/api/process', uploadLimiter);
+
+// Auth
 app.use('/api/auth', authLimiter);
+
+// Fallback
 app.use('/api/', defaultLimiter);
 
 const outputsDir = path.join(process.cwd(), 'tmp', 'outputs');
