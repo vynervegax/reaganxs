@@ -11,7 +11,7 @@ COPY package.json pnpm-lock.yaml* ./
 
 RUN corepack enable && \
     pnpm config set ignore-scripts false && \
-    pnpm install --frozen-lockfile
+    pnpm install
 
 COPY . .
 RUN rm -rf dist && pnpm exec tsc
