@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
+import { compressInBrowser } from '@/lib/browserCompress';
 
 export type ProcessJobResult = {
   url: string;
@@ -33,6 +34,7 @@ type Props = {
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_BACKEND_URL ||
+  'http://localhost:4000'
 )
   .trim()
   .replace(/\/$/, '')
@@ -56,53 +58,59 @@ export default function UploadZone({
     async (file: File) => {
       setError(null);
       setUploading(true);
-      setProgress(2);
-      setStatus('Getting upload URL…');
+      setProgress(1);
+      setStatus('Preparing on your device…');
 
       try {
         const token =
           typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        if (token) {
-          headers.Authorization = `Bearer ${token}`;
-        }
+        if (token) headers.Authorization = `Bearer ${token}`;
 
-        // 1. Get presigned URL
+        // ── 1. Compress on device (hybrid) ─────────────────────────────
+        const compressed = await compressInBrowser(
+          file,
+          (ratio) => {
+            // Map 0–1 compress progress → 5–50% of overall bar
+            setProgress(5 + Math.round(ratio * 45));
+          },
+          (msg) => setStatus(msg)
+        );
+
+        setStatus('Getting upload URL…');
+        setProgress(52);
+
+        // ── 2. Presign ─────────────────────────────────────────────────
         const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
-            filename: file.name,
-            contentType: file.type || 'video/mp4',
+            filename: file.name.replace(/\.\w+$/, '') + '.webm',
+            contentType: 'video/webm',
           }),
         });
-
         const presignData = await presignRes.json();
         if (!presignRes.ok || !presignData.uploadUrl) {
           throw new Error(presignData.message || 'Failed to get upload URL');
         }
-
         const { uploadUrl, key } = presignData;
 
-        // 2. Upload directly to R2 with progress
-        setStatus('Uploading to storage…');
-        setProgress(5);
+        // ── 3. Upload compressed blob to R2 ────────────────────────────
+        setStatus('Uploading compressed video…');
+        setProgress(55);
 
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           abortRef.current = xhr;
-
           xhr.open('PUT', uploadUrl);
-          xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+          xhr.setRequestHeader('Content-Type', 'video/webm');
 
           xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
-              // Map 0–100% of the R2 upload into 5–55% of the overall bar
-              const uploadPercent = Math.round((e.loaded / e.total) * 50) + 5;
-              setProgress(uploadPercent);
+              const p = 55 + Math.round((e.loaded / e.total) * 15);
+              setProgress(p);
               setStatus(`Uploading… ${Math.round((e.loaded / e.total) * 100)}%`);
             }
           };
@@ -111,16 +119,14 @@ export default function UploadZone({
             if (xhr.status >= 200 && xhr.status < 300) resolve();
             else reject(new Error(`Upload failed (${xhr.status})`));
           };
-
           xhr.onerror = () => reject(new Error('Network error during upload'));
           xhr.onabort = () => reject(new Error('Upload cancelled'));
-
-          xhr.send(file);
+          xhr.send(compressed.blob);
         });
 
-        // 3. Tell backend the upload finished
-        setStatus('Starting processing…');
-        setProgress(58);
+        // ── 4. Tell cloud to process (skip compress) ───────────────────
+        setStatus('Starting cloud processing…');
+        setProgress(72);
 
         const completeRes = await fetch(`${API_BASE}/api/upload/complete`, {
           method: 'POST',
@@ -129,11 +135,13 @@ export default function UploadZone({
             key,
             originalFilename: file.name,
             originalSize: file.size,
+            compressedSize: compressed.compressedSize,
+            codec: compressed.codec,
+            skipCompress: true,
             model: selectedModel,
             deviceProfile,
           }),
         });
-
         const completeData = await completeRes.json();
         if (!completeRes.ok || !completeData.success) {
           throw new Error(completeData.message || 'Failed to start processing');
@@ -141,19 +149,21 @@ export default function UploadZone({
 
         const jobId = completeData.jobId;
         setStatus('Queued…');
-        setProgress(60);
+        setProgress(75);
 
-        // 4. Poll job status
+        // ── 5. Poll status ─────────────────────────────────────────────
         const poll = async (): Promise<void> => {
           const r = await fetch(`${API_BASE}/api/process/${jobId}`);
-          const d = await r.json();
-          if (!r.ok || !d.job) {
-            throw new Error(d.message || 'Status check failed');
+          if (r.status === 429) {
+            setStatus('Checking status…');
+            await new Promise((res) => setTimeout(res, 4000));
+            return poll();
           }
+          const d = await r.json();
+          if (!r.ok || !d.job) throw new Error(d.message || 'Status check failed');
 
           const j = d.job;
-          // Map job progress (0–100) into 60–100 of the overall bar
-          const mapped = 60 + Math.round((j.progress || 0) * 0.4);
+          const mapped = 75 + Math.round((j.progress || 0) * 0.25);
           setProgress(Math.min(99, mapped));
           setStatus(j.status || 'Processing…');
 
@@ -168,19 +178,17 @@ export default function UploadZone({
               restored: Boolean(j.restored ?? j.didRestore),
               originalSize: j.originalSize ?? file.size,
               finalSize: j.finalSize,
-              codec: j.codec,
+              codec: j.codec || compressed.codec,
               tier,
               isDemo: !isLoggedIn,
               vmafScore: j.vmafScore,
             });
             return;
           }
-
           if (j.status === 'failed') {
             throw new Error(j.error || 'Processing failed');
           }
-
-          await new Promise((resolve) => setTimeout(resolve, 2500));
+          await new Promise((res) => setTimeout(res, 2500));
           return poll();
         };
 
@@ -199,8 +207,8 @@ export default function UploadZone({
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) upload(file);
+    const f = e.dataTransfer.files?.[0];
+    if (f) upload(f);
   };
 
   return (
@@ -220,7 +228,7 @@ export default function UploadZone({
       >
         <p className="text-lg font-medium text-white mb-2">Drop a video here</p>
         <p className="text-sm text-white/50 mb-6">
-          Compress first (SVT-AV1 → VP9) · restore only when beneficial
+          Compresses on your device · result stored in the cloud
         </p>
 
         <label className="inline-flex cursor-pointer px-6 py-3 rounded-2xl font-semibold text-black bg-gradient-to-r from-[#f97316] to-[#c084fc]">

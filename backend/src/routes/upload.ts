@@ -48,12 +48,15 @@ router.post('/presign', optionalAuthenticate, async (req, res) => {
 router.post('/complete', optionalAuthenticate, async (req, res) => {
   try {
     const {
-      key,
-      originalFilename,
-      originalSize,
-      model,
-      deviceProfile,
-    } = req.body;
+  key,
+  originalFilename,
+  originalSize,
+  compressedSize,
+  codec,
+  skipCompress,
+  model,
+  deviceProfile,
+} = req.body;
 
     if (!key || !originalFilename || !originalSize) {
       return res.status(400).json({
@@ -91,19 +94,23 @@ router.post('/complete', optionalAuthenticate, async (req, res) => {
 
     // Enqueue the normal video job
     await videoQueue.add(
-      'process',
-      {
-        jobId: String(job._id),
-        filePath: localPath,
-        originalFilename,
-        originalSize: Number(originalSize),
-        userId: userId ? String(userId) : null,
-        tier,
-        preferredModel: model ? String(model) : undefined,
-        deviceProfile: deviceProfile || {},
-      },
-      { removeOnComplete: 100, removeOnFail: 50 }
-    );
+  'process',
+  {
+    jobId: String(job._id),
+    filePath: localPath,
+    originalFilename,
+    originalSize: Number(originalSize),
+    compressedSize: compressedSize ? Number(compressedSize) : undefined,
+    codec: codec || undefined,
+    skipCompress: Boolean(skipCompress),
+    userId: userId ? String(userId) : null,
+    tier,
+    preferredModel: model ? String(model) : undefined,
+    deviceProfile: deviceProfile || {},
+    r2Key: key,
+  },
+  { removeOnComplete: 100, removeOnFail: 50 }
+);
 
     return res.json({
       success: true,

@@ -44,6 +44,10 @@ export const videoWorker = new Worker<VideoJobData>(
       tier: tierRaw,
       preferredModel,
       deviceProfile,
+      skipCompress,
+      compressedSize: clientCompressedSize,
+      codec: clientCodec,
+      r2Key,
     } = job.data;
 
     const tier = (tierRaw as UserTier) || 'demo';
@@ -61,17 +65,39 @@ export const videoWorker = new Worker<VideoJobData>(
     const temps: string[] = [originalPath];
 
     try {
-      await ProcessingJob.findByIdAndUpdate(jobId, { status: 'compressing', progress: 15 });
+      let compressedSize = 0;
 
-      const compressedResult = await compressionService.compress(originalPath);
-      compressedPath = compressedResult.outputPath;
-      processedPath = compressedPath;
-      codec = compressedResult.codec || '';
-      const compressedSize = compressedResult.compressedSize ?? sizeOf(compressedPath);
-      temps.push(compressedPath);
+      // ── Compress (or skip if already done on device) ─────────────────
+      if (skipCompress) {
+        // Browser / edge already compressed the file
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'routing',
+          progress: 35,
+        });
+        compressedPath = originalPath;
+        processedPath = compressedPath;
+        codec = clientCodec || 'libvpx-vp9';
+        compressedSize = clientCompressedSize ?? sizeOf(compressedPath);
+      } else {
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'compressing',
+          progress: 15,
+        });
 
-      await ProcessingJob.findByIdAndUpdate(jobId, { status: 'routing', progress: 35 });
+        const compressedResult = await compressionService.compress(originalPath);
+        compressedPath = compressedResult.outputPath;
+        processedPath = compressedPath;
+        codec = compressedResult.codec || '';
+        compressedSize = compressedResult.compressedSize ?? sizeOf(compressedPath);
+        temps.push(compressedPath);
 
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'routing',
+          progress: 35,
+        });
+      }
+
+      // ── Routing ──────────────────────────────────────────────────────
       const user = userId
         ? { id: userId, tier, preferredModel }
         : preferredModel
@@ -88,8 +114,12 @@ export const videoWorker = new Worker<VideoJobData>(
       let restoreSkippedReason: string | null = decision.reason || null;
       const model = decision.model;
 
+      // ── Restore (optional) ───────────────────────────────────────────
       if (model) {
-        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'restoring', progress: 55 });
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'restoring',
+          progress: 55,
+        });
 
         let fullAccepted = false;
         try {
@@ -117,10 +147,14 @@ export const videoWorker = new Worker<VideoJobData>(
 
         if (!fullAccepted) {
           try {
-            const partial = await restorationService.restorePartialFrames(compressedPath, model, {
-              frameCount: partialOpts.frameCount,
-              maxWidth: partialOpts.maxWidth,
-            });
+            const partial = await restorationService.restorePartialFrames(
+              compressedPath,
+              model,
+              {
+                frameCount: partialOpts.frameCount,
+                maxWidth: partialOpts.maxWidth,
+              }
+            );
 
             for (const fp of partial.framePaths) {
               try {
@@ -168,6 +202,7 @@ export const videoWorker = new Worker<VideoJobData>(
         }
       }
 
+      // ── Size gate ────────────────────────────────────────────────────
       let finalSize = sizeOf(processedPath);
       if (finalSize > originalSize) {
         processedPath = compressedPath;
@@ -179,9 +214,16 @@ export const videoWorker = new Worker<VideoJobData>(
           (restoreSkippedReason || '') + ' | forced compressed (size gate)';
       }
 
-      await ProcessingJob.findByIdAndUpdate(jobId, { status: 'uploading', progress: 80 });
+      // ── Upload final ─────────────────────────────────────────────────
+      await ProcessingJob.findByIdAndUpdate(jobId, {
+        status: 'uploading',
+        progress: 80,
+      });
 
-      const finalUrl = await r2Service.uploadWithExpiry(processedPath, decision.expiryHours);
+      const finalUrl = await r2Service.uploadWithExpiry(
+        processedPath,
+        decision.expiryHours
+      );
 
       const savingsPercent = savingsService.calculate
         ? savingsService.calculate(originalSize, finalSize)
@@ -192,7 +234,12 @@ export const videoWorker = new Worker<VideoJobData>(
       let vmafScore: number | null = null;
       if (offering.canUseVMAF && (tier === 'premium' || tier === 'desktop')) {
         try {
-          const metrics = await qualityMetricsService.runVMAF(originalPath, processedPath);
+          // When skipCompress, originalPath is already the compressed file —
+          // VMAF against true original is not available unless we keep a ref.
+          const metrics = await qualityMetricsService.runVMAF(
+            originalPath,
+            processedPath
+          );
           vmafScore = typeof metrics?.vmafScore === 'number' ? metrics.vmafScore : null;
         } catch (e: any) {
           console.warn('[worker] VMAF', e?.message);
@@ -216,7 +263,17 @@ export const videoWorker = new Worker<VideoJobData>(
         previewClipUrl,
       });
 
+      // Cleanup local temps
       for (const t of temps) safeUnlink(t);
+
+      // Cleanup original upload on R2 (if present)
+      if (r2Key) {
+        try {
+          await r2Service.deleteObject?.(r2Key);
+        } catch (e: any) {
+          console.warn('[worker] r2 delete', e?.message);
+        }
+      }
     } catch (error: any) {
       console.error('[worker]', error);
       await ProcessingJob.findByIdAndUpdate(jobId, {
@@ -224,6 +281,13 @@ export const videoWorker = new Worker<VideoJobData>(
         error: error?.message || 'Processing failed',
       });
       for (const t of temps) safeUnlink(t);
+      if (r2Key) {
+        try {
+          await r2Service.deleteObject?.(r2Key);
+        } catch {
+          /* ignore */
+        }
+      }
       throw error;
     }
   },
