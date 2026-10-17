@@ -33,7 +33,6 @@ type Props = {
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_BACKEND_URL ||
-  'http://localhost:4000'
 )
   .trim()
   .replace(/\/$/, '')
