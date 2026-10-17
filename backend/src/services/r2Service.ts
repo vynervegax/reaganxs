@@ -4,6 +4,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
@@ -135,5 +136,20 @@ export const r2Service = {
 
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     await pipeline(res.Body as Readable, fs.createWriteStream(destPath));
+  },
+
+async deleteObject(key: string): Promise<void> {
+    if (!client || !key) return;
+    try {
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+      );
+      console.log('[storage] deleted', key);
+    } catch (err: any) {
+      console.warn('[storage] delete failed', key, err?.message);
+    }
   },
 };
