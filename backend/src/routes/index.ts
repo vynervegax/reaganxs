@@ -9,6 +9,7 @@ import userRoutes from './user';
 import stripeRoutes from './stripe';
 import tempPremiumRoutes from './tempPremium';
 import desktopRoutes from './desktop';
+import uploadRoutes from './upload';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/user', userRoutes);
 router.use('/stripe', stripeRoutes);
 router.use('/temp-premium', tempPremiumRoutes);
 router.use('/desktop', desktopRoutes);
+router.use('/upload', uploadRoutes);
 
 export default router;

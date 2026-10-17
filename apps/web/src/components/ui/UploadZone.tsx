@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { resilientFetch } from '@/lib/resilientFetch';
 
 export type ProcessJobResult = {
   url: string;
@@ -52,67 +51,100 @@ export default function UploadZone({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef = useRef<XMLHttpRequest | null>(null);
 
   const upload = useCallback(
     async (file: File) => {
       setError(null);
       setUploading(true);
-      setProgress(5);
-      setStatus('Preparing…');
-
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
+      setProgress(2);
+      setStatus('Getting upload URL…');
 
       try {
-        const form = new FormData();
-        form.append('video', file);
-        if (deviceProfile) {
-          form.append('deviceProfile', JSON.stringify(deviceProfile));
-        }
-        if (selectedModel) {
-          form.append('model', selectedModel);
-        }
-
         const token =
           typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
-        const headers: HeadersInit = {};
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
         if (token) {
           headers.Authorization = `Bearer ${token}`;
         }
 
-        setProgress(15);
-        setStatus('Uploading…');
-
-        const res = await resilientFetch(`${API_BASE}/api/process`, {
+        // 1. Get presigned URL
+        const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
           method: 'POST',
           headers,
-          body: form,
-          signal: ac.signal,
-          retries: 6,
-          baseDelayMs: 1500,
-          maxDelayMs: 15000,
-          onRetry: ({ attempt, retriesLeft, waitingForOnline }) => {
-            setProgress((p) => Math.min(30, p + 3));
-            setStatus(
-              waitingForOnline
-                ? 'Network offline — waiting to reconnect…'
-                : `Connection issue — retry ${attempt} (${retriesLeft} left)…`
-            );
-          },
+          body: JSON.stringify({
+            filename: file.name,
+            contentType: file.type || 'video/mp4',
+          }),
         });
 
-        const data = await res.json().catch(() => ({} as any));
-        if (!res.ok || data.success === false) {
-          throw new Error(data.message || `Upload failed (${res.status})`);
+        const presignData = await presignRes.json();
+        if (!presignRes.ok || !presignData.uploadUrl) {
+          throw new Error(presignData.message || 'Failed to get upload URL');
         }
 
-        const jobId = data.jobId;
-        setStatus('Queued…');
-        setProgress(20);
+        const { uploadUrl, key } = presignData;
 
+        // 2. Upload directly to R2 with progress
+        setStatus('Uploading to storage…');
+        setProgress(5);
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          abortRef.current = xhr;
+
+          xhr.open('PUT', uploadUrl);
+          xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              // Map 0–100% of the R2 upload into 5–55% of the overall bar
+              const uploadPercent = Math.round((e.loaded / e.total) * 50) + 5;
+              setProgress(uploadPercent);
+              setStatus(`Uploading… ${Math.round((e.loaded / e.total) * 100)}%`);
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`Upload failed (${xhr.status})`));
+          };
+
+          xhr.onerror = () => reject(new Error('Network error during upload'));
+          xhr.onabort = () => reject(new Error('Upload cancelled'));
+
+          xhr.send(file);
+        });
+
+        // 3. Tell backend the upload finished
+        setStatus('Starting processing…');
+        setProgress(58);
+
+        const completeRes = await fetch(`${API_BASE}/api/upload/complete`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            key,
+            originalFilename: file.name,
+            originalSize: file.size,
+            model: selectedModel,
+            deviceProfile,
+          }),
+        });
+
+        const completeData = await completeRes.json();
+        if (!completeRes.ok || !completeData.success) {
+          throw new Error(completeData.message || 'Failed to start processing');
+        }
+
+        const jobId = completeData.jobId;
+        setStatus('Queued…');
+        setProgress(60);
+
+        // 4. Poll job status
         const poll = async (): Promise<void> => {
           const r = await fetch(`${API_BASE}/api/process/${jobId}`);
           const d = await r.json();
@@ -121,7 +153,9 @@ export default function UploadZone({
           }
 
           const j = d.job;
-          setProgress(j.progress || 20);
+          // Map job progress (0–100) into 60–100 of the overall bar
+          const mapped = 60 + Math.round((j.progress || 0) * 0.4);
+          setProgress(Math.min(99, mapped));
           setStatus(j.status || 'Processing…');
 
           if (j.status === 'completed') {
@@ -136,7 +170,7 @@ export default function UploadZone({
               originalSize: j.originalSize ?? file.size,
               finalSize: j.finalSize,
               codec: j.codec,
-              tier: tier,
+              tier,
               isDemo: !isLoggedIn,
               vmafScore: j.vmafScore,
             });
@@ -153,14 +187,11 @@ export default function UploadZone({
 
         await poll();
       } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          setError('Cancelled');
-        } else {
-          console.error(err);
-          setError(err?.message || 'Processing failed');
-        }
+        console.error(err);
+        setError(err?.message || 'Processing failed');
       } finally {
         setUploading(false);
+        abortRef.current = null;
       }
     },
     [deviceProfile, selectedModel, onUploadComplete, tier, isLoggedIn]
