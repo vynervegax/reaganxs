@@ -40,7 +40,7 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 const keyGenerator = (req: any) => {
   const userId = req.user?.id || req.user?._id;
   if (userId) return String(userId);
-  return ipKeyGenerator(req); // proper IPv6 handling
+  return ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown');
 };
 
 const uploadLimiter = rateLimit({
@@ -67,8 +67,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many auth attempts.' },
-  // auth usually by IP is fine
-  keyGenerator: (req) => ipKeyGenerator(req),
+  keyGenerator: (req) => ipKeyGenerator(req.ip || 'unknown'),
 });
 
 const defaultLimiter = rateLimit({
