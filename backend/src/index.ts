@@ -4,6 +4,7 @@ dotenv.config();
 import app from './server';
 import { connectDB } from './config/db';
 import { startCleanupJobs } from './utils/cleanup';
+import { modelService } from './services/modelService';
 import './workers/videoWorker';
 
 const raw = process.env.PORT;
@@ -28,6 +29,14 @@ async function start() {
     startCleanupJobs();
   } catch (err) {
     console.error('❌ MongoDB failed (HTTP is still up; cleanup not started)', err);
+  }
+
+  // Ensure model weights exist on the volume (download from R2 only if missing)
+  try {
+    await modelService.ensureModels();
+    console.log('✅ Models ready');
+  } catch (err) {
+    console.warn('Model ensure failed (will fall back to FFmpeg enhance)', err);
   }
 }
 

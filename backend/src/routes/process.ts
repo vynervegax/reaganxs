@@ -8,6 +8,7 @@ import { tierGuard } from '../middleware/tierGuard';
 import { validateFileMiddleware } from '../middleware/validateFile';
 import { processController } from '../controllers/processController';
 import { UPLOAD_TEMP_DIR, MAX_UPLOAD_BYTES } from '../config/constants';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const router = Router();
 
@@ -24,6 +25,19 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
+const statusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many status checks.' },
+  keyGenerator: (req: any) => {
+    const userId = req.user?.id || req.user?._id;
+    if (userId) return String(userId);
+    return ipKeyGenerator(req.ip || 'unknown');
+  },
+});
+
 router.post(
   '/',
   optionalAuthenticate,
@@ -33,6 +47,6 @@ router.post(
   processController.processVideo
 );
 
-router.get('/:id', processController.getJobStatus);
+router.get('/:id', statusLimiter, processController.getJobStatus);
 
 export default router;

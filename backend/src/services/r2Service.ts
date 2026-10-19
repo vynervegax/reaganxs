@@ -4,18 +4,25 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 
 const accountId = process.env.R2_ACCOUNT_ID || '';
 const accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
 const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
 const bucket = process.env.R2_BUCKET_NAME || '';
 const publicBase = (process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
-const apiPublic = (process.env.API_PUBLIC_URL || process.env.BACKEND_URL || 'http://localhost:4000').replace(/\/$/, '');
+const apiPublic = (
+  process.env.API_PUBLIC_URL ||
+  process.env.BACKEND_URL ||
+  'http://localhost:4000'
+).replace(/\/$/, '');
 
 const LOCAL_DIR = path.join(process.cwd(), 'tmp', 'outputs');
 fs.mkdirSync(LOCAL_DIR, { recursive: true });
@@ -37,6 +44,7 @@ function contentTypeFor(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.mp4') return 'video/mp4';
   if (ext === '.webm') return 'video/webm';
+  if (ext === '.mov') return 'video/quicktime';
   return 'application/octet-stream';
 }
 
@@ -94,5 +102,54 @@ export const r2Service = {
     const url = await uploadLocal(localPath);
     console.log('[storage] local OK', url);
     return url;
+  },
+
+  /** Presigned PUT URL so the browser can upload directly to R2 */
+  async createPresignedUpload(originalFilename: string, contentType: string) {
+    if (!client) throw new Error('R2 not configured');
+
+    const ext = path.extname(originalFilename) || '.mp4';
+    const key = `uploads/${Date.now()}-${randomUUID()}${ext}`;
+
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType || 'video/mp4',
+    });
+
+    const uploadUrl = await getSignedUrl(client, command, {
+      expiresIn: 60 * 60, // 1 hour
+    });
+
+    return { uploadUrl, key };
+  },
+
+  /** Download an object from R2 to a local path (used by the worker) */
+  async downloadToLocal(key: string, destPath: string): Promise<void> {
+    if (!client) throw new Error('R2 not configured');
+
+    const res = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key })
+    );
+
+    if (!res.Body) throw new Error(`Empty body for key ${key}`);
+
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    await pipeline(res.Body as Readable, fs.createWriteStream(destPath));
+  },
+
+async deleteObject(key: string): Promise<void> {
+    if (!client || !key) return;
+    try {
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+      );
+      console.log('[storage] deleted', key);
+    } catch (err: any) {
+      console.warn('[storage] delete failed', key, err?.message);
+    }
   },
 };

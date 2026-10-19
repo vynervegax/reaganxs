@@ -59,7 +59,7 @@ export default function UploadZone({
       setError(null);
       setUploading(true);
       setProgress(5);
-      setStatus('Preparing…');
+      setStatus('Uploading…');
 
       abortRef.current?.abort();
       const ac = new AbortController();
@@ -77,30 +77,19 @@ export default function UploadZone({
 
         const token =
           typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-
         const headers: HeadersInit = {};
-        if (token) {
-          headers.Authorization = `Bearer ${token}`;
-        }
-
-        setProgress(15);
-        setStatus('Uploading…');
+        if (token) headers.Authorization = `Bearer ${token}`;
 
         const res = await resilientFetch(`${API_BASE}/api/process`, {
           method: 'POST',
           headers,
           body: form,
           signal: ac.signal,
-          retries: 6,
+          retries: 4,
           baseDelayMs: 1500,
-          maxDelayMs: 15000,
-          onRetry: ({ attempt, retriesLeft, waitingForOnline }) => {
-            setProgress((p) => Math.min(30, p + 3));
-            setStatus(
-              waitingForOnline
-                ? 'Network offline — waiting to reconnect…'
-                : `Connection issue — retry ${attempt} (${retriesLeft} left)…`
-            );
+          maxDelayMs: 10000,
+          onRetry: ({ attempt, retriesLeft }) => {
+            setStatus(`Retry ${attempt} (${retriesLeft} left)…`);
           },
         });
 
@@ -115,13 +104,22 @@ export default function UploadZone({
 
         const poll = async (): Promise<void> => {
           const r = await fetch(`${API_BASE}/api/process/${jobId}`);
-          const d = await r.json();
+          if (r.status === 429) {
+            setStatus('Checking status…');
+            await new Promise((res) => setTimeout(res, 5000));
+            return poll();
+          }
+          const d = await r.json().catch(() => ({} as any));
           if (!r.ok || !d.job) {
+            if (r.status >= 500) {
+              await new Promise((res) => setTimeout(res, 4000));
+              return poll();
+            }
             throw new Error(d.message || 'Status check failed');
           }
 
           const j = d.job;
-          setProgress(j.progress || 20);
+          setProgress(Math.min(99, j.progress || 20));
           setStatus(j.status || 'Processing…');
 
           if (j.status === 'completed') {
@@ -136,26 +134,23 @@ export default function UploadZone({
               originalSize: j.originalSize ?? file.size,
               finalSize: j.finalSize,
               codec: j.codec,
-              tier: tier,
+              tier,
               isDemo: !isLoggedIn,
               vmafScore: j.vmafScore,
             });
             return;
           }
-
           if (j.status === 'failed') {
             throw new Error(j.error || 'Processing failed');
           }
-
-          await new Promise((resolve) => setTimeout(resolve, 2500));
+          await new Promise((res) => setTimeout(res, 4000));
           return poll();
         };
 
         await poll();
       } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          setError('Cancelled');
-        } else {
+        if (err?.name === 'AbortError') setError('Cancelled');
+        else {
           console.error(err);
           setError(err?.message || 'Processing failed');
         }
@@ -169,8 +164,8 @@ export default function UploadZone({
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) upload(file);
+    const f = e.dataTransfer.files?.[0];
+    if (f) upload(f);
   };
 
   return (

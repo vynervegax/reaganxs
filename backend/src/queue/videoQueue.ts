@@ -12,8 +12,12 @@ export type VideoJobData = {
   filePath: string;
   originalFilename: string;
   originalSize: number;
+  compressedSize?: number;
+  codec?: string;
+  skipCompress?: boolean;
   userId: string | null;
   tier: string;
   preferredModel?: string;
   deviceProfile: any;
+  r2Key?: string;
 };

@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 import { connectDB } from './config/db';
 import { errorHandler } from './middleware/errorHandler';
@@ -37,13 +37,19 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // --- Rate limits ---
+const keyGenerator = (req: any) => {
+  const userId = req.user?.id || req.user?._id;
+  if (userId) return String(userId);
+  return ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown');
+};
+
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Upload limit reached. Try again later.' },
-  keyGenerator: (req) => (req as any).user?.id || req.ip,
+  keyGenerator,
 });
 
 const statusLimiter = rateLimit({
@@ -52,7 +58,7 @@ const statusLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many status checks.' },
-  keyGenerator: (req) => (req as any).user?.id || req.ip,
+  keyGenerator,
 });
 
 const authLimiter = rateLimit({
@@ -61,6 +67,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many auth attempts.' },
+  keyGenerator: (req) => ipKeyGenerator(req.ip || 'unknown'),
 });
 
 const defaultLimiter = rateLimit({
@@ -69,19 +76,20 @@ const defaultLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests' },
-  keyGenerator: (req) => (req as any).user?.id || req.ip,
+  keyGenerator,
+  // Status polls must NOT share this bucket
+  skip: (req) =>
+    req.method === 'GET' &&
+    (req.path.startsWith('/process/') || req.originalUrl.includes('/api/process/')),
 });
 
-// Status polling (higher limit) — register first
-app.get('/api/process/:id', statusLimiter);
-
-// Uploads only (POST)
+// Uploads only (POST) — keep these
 app.post('/api/process', uploadLimiter);
 
 // Auth
 app.use('/api/auth', authLimiter);
 
-// Fallback
+// Fallback (status GET is skipped above)
 app.use('/api/', defaultLimiter);
 
 const outputsDir = path.join(process.cwd(), 'tmp', 'outputs');
