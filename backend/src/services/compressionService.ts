@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const COMPRESS_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes — enough for large videos on Hobby
+const COMPRESS_TIMEOUT_MS = 60 * 60 * 1000; // 60 min for large files on Hobby
 
 function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -13,7 +13,9 @@ function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
     let err = '';
     const timer = setTimeout(() => {
       p.kill('SIGKILL');
-      reject(new Error(`FFmpeg timed out after ${Math.round(timeoutMs / 1000)}s`));
+      reject(
+        new Error(`FFmpeg timed out after ${Math.round(timeoutMs / 1000)}s`)
+      );
     }, timeoutMs);
 
     p.stderr.on('data', (d) => (err += d.toString()));
@@ -34,6 +36,28 @@ function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
   });
 }
 
+/** Faster presets for larger files — speed first */
+function presetsForSize(inputBytes: number): {
+  av1Preset: string;
+  av1Crf: string;
+  vp9Crf: string;
+  scaleFilter?: string;
+} {
+  const mb = inputBytes / (1024 * 1024);
+  if (mb < 100) {
+    return { av1Preset: '8', av1Crf: '33', vp9Crf: '32' };
+  }
+  if (mb < 500) {
+    return { av1Preset: '10', av1Crf: '34', vp9Crf: '34' };
+  }
+  return {
+    av1Preset: '12',
+    av1Crf: '35',
+    vp9Crf: '35',
+    scaleFilter: "scale='min(1280,iw)':-2:flags=lanczos",
+  };
+}
+
 export const compressionService = {
   async compress(inputPath: string): Promise<{
     outputPath: string;
@@ -45,28 +69,53 @@ export const compressionService = {
     const av1 = path.join(dir, `${stem}_av1.mp4`);
     const vp9 = path.join(dir, `${stem}_vp9.webm`);
 
-    const audio = [
-      '-c:a', COMPRESS.audio.codec,
-      '-b:a', COMPRESS.audio.bitrate,
-      '-ac', COMPRESS.audio.channels,
-      '-ar', COMPRESS.audio.rate,
-    ];
+    let inputBytes = 0;
+    try {
+      inputBytes = fs.statSync(inputPath).size;
+    } catch {
+      /* ignore */
+    }
+    const p = presetsForSize(inputBytes);
+    console.log(
+      `[compress] size=${(inputBytes / 1024 / 1024).toFixed(1)}MB preset=${p.av1Preset} crf=${p.av1Crf}`
+    );
 
-    // Full duration — never -t (match desktop)
-    // Memory-friendlier flags for Railway Hobby (8 GB)
+    const audio = [
+      '-c:a',
+      COMPRESS.audio.codec,
+      '-b:a',
+      COMPRESS.audio.bitrate,
+      '-ac',
+      COMPRESS.audio.channels,
+      '-ar',
+      COMPRESS.audio.rate,
+    ];
+    const vf = p.scaleFilter ? ['-vf', p.scaleFilter] : [];
+
     try {
       await run([
-        '-hide_banner', '-y',
-        '-i', inputPath,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', COMPRESS.av1.codec,
-        '-preset', COMPRESS.av1.preset,
-        '-crf', COMPRESS.av1.crf,
-        '-svtav1-params', 'lp=1',   // lower parallelism = less RAM
-        '-threads', '2',
+        '-hide_banner',
+        '-y',
+        '-i',
+        inputPath,
+        ...vf,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a:0?',
+        '-c:v',
+        COMPRESS.av1.codec,
+        '-preset',
+        p.av1Preset,
+        '-crf',
+        p.av1Crf,
+        '-svtav1-params',
+        'lp=1',
+        '-threads',
+        '2',
         ...audio,
-        '-movflags', '+faststart',
+        '-movflags',
+        '+faststart',
         '-sn',
         av1,
       ]);
@@ -82,17 +131,26 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    // VP9 fallback (usually lighter on RAM)
     await run([
-      '-hide_banner', '-y',
-      '-i', inputPath,
-      '-map', '0:v:0',
-      '-map', '0:a:0?',
-      '-c:v', COMPRESS.vp9.codec,
-      '-crf', COMPRESS.vp9.crf,
-      '-b:v', '0',
-      '-row-mt', '1',
-      '-threads', '2',
+      '-hide_banner',
+      '-y',
+      '-i',
+      inputPath,
+      ...vf,
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a:0?',
+      '-c:v',
+      COMPRESS.vp9.codec,
+      '-crf',
+      p.vp9Crf,
+      '-b:v',
+      '0',
+      '-row-mt',
+      '1',
+      '-threads',
+      '2',
       ...audio,
       '-sn',
       vp9,

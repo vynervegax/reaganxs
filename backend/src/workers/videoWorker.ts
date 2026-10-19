@@ -17,6 +17,9 @@ const connection = new IORedis(process.env.REDIS_URL || 'redis://127.0.0.1:6379'
   maxRetriesPerRequest: null,
 });
 
+/** Full-timeline restore only under this size, and only for premium/desktop */
+const FULL_RESTORE_MAX_BYTES = 300 * 1024 * 1024; // 300 MB
+
 function sizeOf(p: string): number {
   try {
     return fs.statSync(p).size;
@@ -31,6 +34,71 @@ function safeUnlink(p?: string) {
   } catch {
     /* ignore */
   }
+}
+
+async function runPartialRestore(opts: {
+  compressedPath: string;
+  model: string;
+  partialOpts: { frameCount: number; maxWidth: number };
+  expiryHours: number;
+  temps: string[];
+}): Promise<{
+  previewFrameUrls: string[];
+  previewClipUrl: string | null;
+  frameCount: number;
+}> {
+  const { compressedPath, model, partialOpts, expiryHours, temps } = opts;
+  const previewFrameUrls: string[] = [];
+  let previewClipUrl: string | null = null;
+
+  const partial = await restorationService.restorePartialFrames(
+    compressedPath,
+    model,
+    {
+      frameCount: partialOpts.frameCount,
+      maxWidth: partialOpts.maxWidth,
+    }
+  );
+
+  for (const fp of partial.framePaths) {
+    try {
+      const url = await r2Service.uploadWithExpiry(
+        fp,
+        Math.min(24, expiryHours || 24)
+      );
+      previewFrameUrls.push(url);
+    } catch (upErr: any) {
+      console.warn('[worker] frame upload', upErr?.message);
+    }
+    temps.push(fp);
+  }
+
+  try {
+    const clipLocal = path.join(
+      partial.workDir,
+      `preview_${Date.now()}.webm`
+    );
+    await restorationService.framesToPreviewClip(
+      partial.framePaths,
+      clipLocal,
+      2
+    );
+    temps.push(clipLocal);
+    if (sizeOf(clipLocal) > 0) {
+      previewClipUrl = await r2Service.uploadWithExpiry(
+        clipLocal,
+        Math.min(24, expiryHours || 24)
+      );
+    }
+  } catch (clipErr: any) {
+    console.warn('[worker] preview clip', clipErr?.message);
+  }
+
+  return {
+    previewFrameUrls,
+    previewClipUrl,
+    frameCount: partial.frameCount,
+  };
 }
 
 export const videoWorker = new Worker<VideoJobData>(
@@ -69,7 +137,6 @@ export const videoWorker = new Worker<VideoJobData>(
 
       // ── Compress (or skip if already done on device) ─────────────────
       if (skipCompress) {
-        // Browser / edge already compressed the file
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'routing',
           progress: 35,
@@ -84,11 +151,13 @@ export const videoWorker = new Worker<VideoJobData>(
           progress: 15,
         });
 
-        const compressedResult = await compressionService.compress(originalPath);
+        const compressedResult =
+          await compressionService.compress(originalPath);
         compressedPath = compressedResult.outputPath;
         processedPath = compressedPath;
         codec = compressedResult.codec || '';
-        compressedSize = compressedResult.compressedSize ?? sizeOf(compressedPath);
+        compressedSize =
+          compressedResult.compressedSize ?? sizeOf(compressedPath);
         temps.push(compressedPath);
 
         await ProcessingJob.findByIdAndUpdate(jobId, {
@@ -101,8 +170,8 @@ export const videoWorker = new Worker<VideoJobData>(
       const user = userId
         ? { id: userId, tier, preferredModel }
         : preferredModel
-        ? { preferredModel }
-        : null;
+          ? { preferredModel }
+          : null;
 
       const decision = await routingService.decide(
         { originalSize, size: compressedSize },
@@ -114,8 +183,14 @@ export const videoWorker = new Worker<VideoJobData>(
       let restoreSkippedReason: string | null = decision.reason || null;
       const model = decision.model;
 
-      // ── Restore (optional) ───────────────────────────────────────────
-      if (model) {
+      // Speed-first: full restore only for premium/desktop AND under 300 MB
+      const allowFullRestore =
+        Boolean(model) &&
+        originalSize <= FULL_RESTORE_MAX_BYTES &&
+        (tier === 'premium' || tier === 'desktop');
+
+      // ── Restore ──────────────────────────────────────────────────────
+      if (model && allowFullRestore) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'restoring',
           progress: 55,
@@ -123,9 +198,11 @@ export const videoWorker = new Worker<VideoJobData>(
 
         let fullAccepted = false;
         try {
-          const fullPath = await restorationService.restore(compressedPath, model, {
-            maxWidth: tier === 'demo' ? 960 : 1280,
-          });
+          const fullPath = await restorationService.restore(
+            compressedPath,
+            model,
+            { maxWidth: 1280 }
+          );
           temps.push(fullPath);
           const fullSize = sizeOf(fullPath);
 
@@ -137,59 +214,33 @@ export const videoWorker = new Worker<VideoJobData>(
             restoreSkippedReason = null;
             fullAccepted = true;
           } else {
-            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial frames`;
+            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial`;
             safeUnlink(fullPath);
           }
         } catch (e: any) {
-          restoreSkippedReason = e?.message || 'Full restore failed — partial frames';
+          restoreSkippedReason =
+            e?.message || 'Full restore failed — partial';
           console.warn('[worker]', restoreSkippedReason);
         }
 
         if (!fullAccepted) {
           try {
-            const partial = await restorationService.restorePartialFrames(
+            const partial = await runPartialRestore({
               compressedPath,
               model,
-              {
-                frameCount: partialOpts.frameCount,
-                maxWidth: partialOpts.maxWidth,
-              }
-            );
-
-            for (const fp of partial.framePaths) {
-              try {
-                const url = await r2Service.uploadWithExpiry(
-                  fp,
-                  Math.min(24, decision.expiryHours || 24)
-                );
-                previewFrameUrls.push(url);
-              } catch (upErr: any) {
-                console.warn('[worker] frame upload', upErr?.message);
-              }
-              temps.push(fp);
-            }
-
-            try {
-              const clipLocal = path.join(partial.workDir, `preview_${Date.now()}.webm`);
-              await restorationService.framesToPreviewClip(partial.framePaths, clipLocal, 2);
-              temps.push(clipLocal);
-              if (sizeOf(clipLocal) > 0 && sizeOf(clipLocal) <= originalSize) {
-                previewClipUrl = await r2Service.uploadWithExpiry(
-                  clipLocal,
-                  Math.min(24, decision.expiryHours || 24)
-                );
-              }
-            } catch (clipErr: any) {
-              console.warn('[worker] preview clip', clipErr?.message);
-            }
-
+              partialOpts,
+              expiryHours: decision.expiryHours || 24,
+              temps,
+            });
+            previewFrameUrls = partial.previewFrameUrls;
+            previewClipUrl = partial.previewClipUrl;
             processedPath = compressedPath;
             modelUsed = `${model}-partial`;
             didRestore = true;
             restoreMode = 'partial-frames';
             restoreSkippedReason =
               (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-              `Partial frames OK (${partial.frameCount}, tier=${tier})`;
+              `Partial OK (${partial.frameCount})`;
           } catch (pfErr: any) {
             processedPath = compressedPath;
             modelUsed = COMPRESSION_ONLY;
@@ -197,8 +248,38 @@ export const videoWorker = new Worker<VideoJobData>(
             restoreMode = 'none';
             restoreSkippedReason =
               (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-              (pfErr?.message || 'Partial frames failed');
+              (pfErr?.message || 'Partial failed');
           }
+        }
+      } else if (model) {
+        // Free / demo / large files: partial samples only (speed + VMAF path)
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'restoring',
+          progress: 55,
+        });
+        try {
+          const partial = await runPartialRestore({
+            compressedPath,
+            model,
+            partialOpts,
+            expiryHours: decision.expiryHours || 24,
+            temps,
+          });
+          previewFrameUrls = partial.previewFrameUrls;
+          previewClipUrl = partial.previewClipUrl;
+          processedPath = compressedPath;
+          modelUsed = `${model}-partial`;
+          didRestore = true;
+          restoreMode = 'partial-frames';
+          restoreSkippedReason = `Partial-first (${(originalSize / 1024 / 1024).toFixed(0)}MB, tier=${tier}, frames=${partial.frameCount})`;
+        } catch (pfErr: any) {
+          processedPath = compressedPath;
+          modelUsed = COMPRESSION_ONLY;
+          didRestore = false;
+          restoreMode = 'none';
+          restoreSkippedReason =
+            pfErr?.message || 'Partial frames skipped';
+          console.warn('[worker]', restoreSkippedReason);
         }
       }
 
@@ -228,19 +309,29 @@ export const videoWorker = new Worker<VideoJobData>(
       const savingsPercent = savingsService.calculate
         ? savingsService.calculate(originalSize, finalSize)
         : originalSize > 0
-        ? Math.max(0, Math.round((1 - finalSize / originalSize) * 1000) / 10)
-        : 0;
+          ? Math.max(
+              0,
+              Math.round((1 - finalSize / originalSize) * 1000) / 10
+            )
+          : 0;
 
+      // VMAF: compressed/restored deliverable vs original when tier allows
+      // (skip if skipCompress — originalPath is not the true source)
       let vmafScore: number | null = null;
-      if (offering.canUseVMAF && (tier === 'premium' || tier === 'desktop')) {
+      if (
+        offering.canUseVMAF &&
+        (tier === 'premium' || tier === 'desktop') &&
+        !skipCompress
+      ) {
         try {
-          // When skipCompress, originalPath is already the compressed file —
-          // VMAF against true original is not available unless we keep a ref.
           const metrics = await qualityMetricsService.runVMAF(
             originalPath,
             processedPath
           );
-          vmafScore = typeof metrics?.vmafScore === 'number' ? metrics.vmafScore : null;
+          vmafScore =
+            typeof metrics?.vmafScore === 'number' && metrics.vmafScore > 0
+              ? metrics.vmafScore
+              : null;
         } catch (e: any) {
           console.warn('[worker] VMAF', e?.message);
         }
@@ -263,10 +354,8 @@ export const videoWorker = new Worker<VideoJobData>(
         previewClipUrl,
       });
 
-      // Cleanup local temps
       for (const t of temps) safeUnlink(t);
 
-      // Cleanup original upload on R2 (if present)
       if (r2Key) {
         try {
           await r2Service.deleteObject?.(r2Key);
