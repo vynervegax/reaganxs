@@ -77,18 +77,19 @@ const defaultLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests' },
   keyGenerator,
+  // Status polls must NOT share this bucket
+  skip: (req) =>
+    req.method === 'GET' &&
+    (req.path.startsWith('/process/') || req.originalUrl.includes('/api/process/')),
 });
 
-// Status polling (higher limit) — register first
-app.get('/api/process/:id', statusLimiter);
-
-// Uploads only (POST)
+// Uploads only (POST) — keep these
 app.post('/api/process', uploadLimiter);
 
 // Auth
 app.use('/api/auth', authLimiter);
 
-// Fallback
+// Fallback (status GET is skipped above)
 app.use('/api/', defaultLimiter);
 
 const outputsDir = path.join(process.cwd(), 'tmp', 'outputs');
