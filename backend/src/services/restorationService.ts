@@ -9,18 +9,40 @@ import {
   COMPRESS,
 } from '../config/constants';
 
-function run(args: string[]): Promise<void> {
+const RESTORE_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes — fail instead of hang forever
+
+function run(args: string[], timeoutMs = RESTORE_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[restore]', args.join(' '));
     const p = spawn('ffmpeg', ['-hide_banner', '-y', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
     let err = '';
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL');
+      reject(
+        new Error(
+          `FFmpeg restore timed out after ${Math.round(timeoutMs / 1000)}s`
+        )
+      );
+    }, timeoutMs);
+
     p.stderr.on('data', (d) => (err += d.toString()));
-    p.on('close', (c) =>
-      c === 0 ? resolve() : reject(new Error(err.slice(-2500)))
-    );
-    p.on('error', reject);
+
+    p.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve();
+      if (signal === 'SIGKILL') {
+        return reject(new Error('FFmpeg restore killed (OOM or timeout)'));
+      }
+      reject(new Error(err.slice(-2500) || `FFmpeg exited ${code}`));
+    });
+
+    p.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
   });
 }
 
@@ -32,7 +54,7 @@ function fileSize(p: string): number {
   }
 }
 
-/** SVT-AV1 → VP9 only. Never H.264 / H.265. */
+/** SVT-AV1 → VP9 only. Never H.264 / H.265. Memory-friendlier for Hobby. */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -53,9 +75,13 @@ async function encodeAv1OrVp9(
       '-c:v',
       'libsvtav1',
       '-preset',
-      '8',
+      '10', // faster than 8 on small RAM
       '-crf',
-      '30',
+      '32',
+      '-svtav1-params',
+      'lp=1',
+      '-threads',
+      '2',
       '-c:a',
       'libopus',
       '-b:a',
@@ -89,11 +115,13 @@ async function encodeAv1OrVp9(
     '-c:v',
     'libvpx-vp9',
     '-crf',
-    '32',
+    '34',
     '-b:v',
     '0',
     '-row-mt',
     '1',
+    '-threads',
+    '2',
     '-c:a',
     'libopus',
     '-b:a',
@@ -130,7 +158,7 @@ async function enhanceFramePng(
   ].join(',');
 
   try {
-    await run(['-i', src, '-vf', vfA, dest]);
+    await run(['-i', src, '-vf', vfA, dest], 2 * 60 * 1000); // 2 min per frame
     if (fileSize(dest) > 0) return;
   } catch {
     /* fall through */
@@ -143,7 +171,7 @@ async function enhanceFramePng(
     'unsharp=5:5:1.0:5:5:0.5',
   ].join(',');
 
-  await run(['-i', src, '-vf', vfB, dest]);
+  await run(['-i', src, '-vf', vfB, dest], 2 * 60 * 1000);
 }
 
 export type RestoreOptions = {
@@ -236,15 +264,10 @@ export const restorationService = {
 
     if (opts.maxSeconds && opts.maxSeconds > 0) {
       const slice = path.join(workDir, `slice_${Date.now()}.mp4`);
-      await run([
-        '-t',
-        String(opts.maxSeconds),
-        '-i',
-        inputPath,
-        '-c',
-        'copy',
-        slice,
-      ]);
+      await run(
+        ['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice],
+        2 * 60 * 1000
+      );
       source = slice;
     }
 
@@ -284,15 +307,18 @@ export const restorationService = {
     fs.mkdirSync(framesOut, { recursive: true });
 
     const patternIn = path.join(framesIn, 'frame_%03d.png');
-    await run([
-      '-i',
-      compressedPath,
-      '-vf',
-      `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-      '-frames:v',
-      String(frameCount),
-      patternIn,
-    ]);
+    await run(
+      [
+        '-i',
+        compressedPath,
+        '-vf',
+        `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+        '-frames:v',
+        String(frameCount),
+        patternIn,
+      ],
+      3 * 60 * 1000
+    );
 
     const inputs = fs
       .readdirSync(framesIn)
@@ -367,43 +393,53 @@ export const restorationService = {
     const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
 
     try {
-      await run([
-        '-f',
-        'concat',
-        '-safe',
-        '0',
-        '-r',
-        String(fps),
-        '-i',
-        listFile,
-        '-c:v',
-        'libsvtav1',
-        '-preset',
-        '10',
-        '-crf',
-        '35',
-        '-an',
-        raw,
-      ]);
+      await run(
+        [
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-r',
+          String(fps),
+          '-i',
+          listFile,
+          '-c:v',
+          'libsvtav1',
+          '-preset',
+          '10',
+          '-crf',
+          '35',
+          '-svtav1-params',
+          'lp=1',
+          '-threads',
+          '2',
+          '-an',
+          raw,
+        ],
+        3 * 60 * 1000
+      );
     } catch {
-      await run([
-        '-f',
-        'concat',
-        '-safe',
-        '0',
-        '-r',
-        String(fps),
-        '-i',
-        listFile,
-        '-c:v',
-        'libvpx-vp9',
-        '-crf',
-        '34',
-        '-b:v',
-        '0',
-        '-an',
-        raw,
-      ]);
+      await run(
+        [
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-r',
+          String(fps),
+          '-i',
+          listFile,
+          '-c:v',
+          'libvpx-vp9',
+          '-crf',
+          '34',
+          '-b:v',
+          '0',
+          '-an',
+          raw,
+        ],
+        3 * 60 * 1000
+      );
     }
 
     if (fileSize(raw) === 0) {
