@@ -3,34 +3,16 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const COMPRESS_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes — enough for large videos on Hobby
-
-function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
+function run(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[compress]', args.join(' '));
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-
     let err = '';
-    const timer = setTimeout(() => {
-      p.kill('SIGKILL');
-      reject(new Error(`FFmpeg timed out after ${Math.round(timeoutMs / 1000)}s`));
-    }, timeoutMs);
-
     p.stderr.on('data', (d) => (err += d.toString()));
-
-    p.on('close', (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) return resolve();
-      if (signal === 'SIGKILL') {
-        return reject(new Error('FFmpeg killed (likely OOM or timeout)'));
-      }
-      reject(new Error(err.slice(-2000) || `FFmpeg exited with code ${code}`));
-    });
-
-    p.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
+    p.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(err.slice(-2000)))
+    );
+    p.on('error', reject);
   });
 }
 
@@ -53,7 +35,6 @@ export const compressionService = {
     ];
 
     // Full duration — never -t (match desktop)
-    // Memory-friendlier flags for Railway Hobby (8 GB)
     try {
       await run([
         '-hide_banner', '-y',
@@ -63,14 +44,11 @@ export const compressionService = {
         '-c:v', COMPRESS.av1.codec,
         '-preset', COMPRESS.av1.preset,
         '-crf', COMPRESS.av1.crf,
-        '-svtav1-params', 'lp=1',   // lower parallelism = less RAM
-        '-threads', '2',
         ...audio,
         '-movflags', '+faststart',
         '-sn',
         av1,
       ]);
-
       if (fs.existsSync(av1) && fs.statSync(av1).size > 0) {
         return {
           outputPath: av1,
@@ -82,7 +60,6 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    // VP9 fallback (usually lighter on RAM)
     await run([
       '-hide_banner', '-y',
       '-i', inputPath,
@@ -92,7 +69,6 @@ export const compressionService = {
       '-crf', COMPRESS.vp9.crf,
       '-b:v', '0',
       '-row-mt', '1',
-      '-threads', '2',
       ...audio,
       '-sn',
       vp9,

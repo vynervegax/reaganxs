@@ -53,8 +53,8 @@ export const MODEL_IDS = {
 } as const;
 
 export const MODEL_FILES: Record<string, string> = {
-  'rgt-webphoto': '4xRealWebPhoto_v2_rtg_s.pth',       
-  'atd-webphoto': '4xRealWebPhoto_v3_atd.safetensors',
+  'rgt-webphoto': 'RealWebPhoto_RGT.pth',       // put the real filename you downloaded
+  'atd-webphoto': 'RealWebPhoto_ATD.pth',
   'rgt-s': 'RGT_S_x4.pth',
   'atd-srx4': '003_ATD_SRx4_finetune.pth',
 };

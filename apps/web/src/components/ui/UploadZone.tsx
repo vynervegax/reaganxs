@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { compressInBrowser } from '@/lib/browserCompress';
+import { resilientFetch } from '@/lib/resilientFetch';
 
 export type ProcessJobResult = {
   url: string;
@@ -40,9 +40,6 @@ const API_BASE = (
   .replace(/\/$/, '')
   .replace(/\s+/g, '');
 
-/** Hybrid (browser compress) only below this size */
-const HYBRID_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
-
 export default function UploadZone({
   onUploadComplete,
   deviceProfile,
@@ -55,240 +52,125 @@ export default function UploadZone({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
-  const abortRef = useRef<XMLHttpRequest | null>(null);
-
-  const pollUntilDone = useCallback(
-    async (
-      jobId: string,
-      file: File,
-      fallbackCodec?: string
-    ): Promise<void> => {
-      const poll = async (): Promise<void> => {
-        const r = await fetch(`${API_BASE}/api/process/${jobId}`);
-
-        if (r.status === 429) {
-          setStatus('Checking status…');
-          await new Promise((res) => setTimeout(res, 5000));
-          return poll();
-        }
-
-        const d = await r.json().catch(() => ({} as any));
-        if (!r.ok || !d.job) {
-          if (r.status >= 500) {
-            await new Promise((res) => setTimeout(res, 4000));
-            return poll();
-          }
-          throw new Error(d.message || `Status check failed (${r.status})`);
-        }
-
-        const j = d.job;
-        const mapped = 75 + Math.round((j.progress || 0) * 0.25);
-        setProgress(Math.min(99, mapped));
-        setStatus(j.status || 'Processing…');
-
-        if (j.status === 'completed') {
-          setProgress(100);
-          setStatus('Done');
-          onUploadComplete({
-            url: j.finalUrl,
-            savingsPercent: j.savingsPercent ?? 0,
-            modelUsed: j.modelUsed,
-            didRestore: Boolean(j.didRestore ?? j.restored),
-            restored: Boolean(j.restored ?? j.didRestore),
-            originalSize: j.originalSize ?? file.size,
-            finalSize: j.finalSize,
-            codec: j.codec || fallbackCodec,
-            tier,
-            isDemo: !isLoggedIn,
-            vmafScore: j.vmafScore,
-          });
-          return;
-        }
-
-        if (j.status === 'failed') {
-          throw new Error(j.error || 'Processing failed');
-        }
-
-        await new Promise((res) => setTimeout(res, 4000));
-        return poll();
-      };
-
-      await poll();
-    },
-    [onUploadComplete, tier, isLoggedIn]
-  );
-
-  const uploadViaPresign = useCallback(
-    async (
-      blob: Blob,
-      filename: string,
-      contentType: string,
-      onUploadProgress: (loaded: number, total: number) => void
-    ): Promise<string> => {
-      const token =
-        typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ filename, contentType }),
-      });
-      const presignData = await presignRes.json();
-      if (!presignRes.ok || !presignData.uploadUrl) {
-        throw new Error(presignData.message || 'Failed to get upload URL');
-      }
-      const { uploadUrl, key } = presignData;
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        abortRef.current = xhr;
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', contentType);
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) onUploadProgress(e.loaded, e.total);
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Upload failed (${xhr.status})`));
-        };
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-        xhr.onabort = () => reject(new Error('Upload cancelled'));
-        xhr.send(blob);
-      });
-
-      return key;
-    },
-    []
-  );
+  const abortRef = useRef<AbortController | null>(null);
 
   const upload = useCallback(
     async (file: File) => {
       setError(null);
       setUploading(true);
-      setProgress(1);
+      setProgress(5);
       setStatus('Preparing…');
 
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+
       try {
+        const form = new FormData();
+        form.append('video', file);
+        if (deviceProfile) {
+          form.append('deviceProfile', JSON.stringify(deviceProfile));
+        }
+        if (selectedModel) {
+          form.append('model', selectedModel);
+        }
+
         const token =
           typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        if (token) headers.Authorization = `Bearer ${token}`;
 
-        const useHybrid = file.size < HYBRID_MAX_BYTES;
-
-        let key: string;
-        let completeBody: Record<string, unknown>;
-
-        if (useHybrid) {
-          // ── Hybrid: compress on device, upload small result ──────────
-          setStatus('Compressing on your device…');
-          const compressed = await compressInBrowser(
-            file,
-            (ratio) => setProgress(5 + Math.round(ratio * 45)),
-            (msg) => setStatus(msg)
-          );
-
-          setStatus('Getting upload URL…');
-          setProgress(52);
-
-          key = await uploadViaPresign(
-            compressed.blob,
-            file.name.replace(/\.\w+$/, '') + '.webm',
-            'video/webm',
-            (loaded, total) => {
-              setProgress(55 + Math.round((loaded / total) * 15));
-              setStatus(`Uploading… ${Math.round((loaded / total) * 100)}%`);
-            }
-          );
-
-          completeBody = {
-            key,
-            originalFilename: file.name,
-            originalSize: file.size,
-            compressedSize: compressed.compressedSize,
-            codec: compressed.codec,
-            skipCompress: true,
-            model: selectedModel,
-            deviceProfile,
-          };
-        } else {
-          // ── Full cloud: upload original, server compresses ───────────
-          setStatus(
-            `Large file (${(file.size / 1024 / 1024).toFixed(0)} MB) — uploading to cloud…`
-          );
-          setProgress(10);
-
-          key = await uploadViaPresign(
-            file,
-            file.name,
-            file.type || 'video/mp4',
-            (loaded, total) => {
-              setProgress(10 + Math.round((loaded / total) * 55));
-              setStatus(
-                `Uploading original… ${Math.round((loaded / total) * 100)}%`
-              );
-            }
-          );
-
-          completeBody = {
-            key,
-            originalFilename: file.name,
-            originalSize: file.size,
-            skipCompress: false,
-            model: selectedModel,
-            deviceProfile,
-          };
+        const headers: HeadersInit = {};
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
         }
 
-        setStatus('Starting cloud processing…');
-        setProgress(72);
+        setProgress(15);
+        setStatus('Uploading…');
 
-        const completeRes = await fetch(`${API_BASE}/api/upload/complete`, {
+        const res = await resilientFetch(`${API_BASE}/api/process`, {
           method: 'POST',
           headers,
-          body: JSON.stringify(completeBody),
+          body: form,
+          signal: ac.signal,
+          retries: 6,
+          baseDelayMs: 1500,
+          maxDelayMs: 15000,
+          onRetry: ({ attempt, retriesLeft, waitingForOnline }) => {
+            setProgress((p) => Math.min(30, p + 3));
+            setStatus(
+              waitingForOnline
+                ? 'Network offline — waiting to reconnect…'
+                : `Connection issue — retry ${attempt} (${retriesLeft} left)…`
+            );
+          },
         });
-        const completeData = await completeRes.json();
-        if (!completeRes.ok || !completeData.success) {
-          throw new Error(completeData.message || 'Failed to start processing');
+
+        const data = await res.json().catch(() => ({} as any));
+        if (!res.ok || data.success === false) {
+          throw new Error(data.message || `Upload failed (${res.status})`);
         }
 
+        const jobId = data.jobId;
         setStatus('Queued…');
-        setProgress(75);
+        setProgress(20);
 
-        await pollUntilDone(
-          completeData.jobId,
-          file,
-          useHybrid ? 'libvpx-vp9' : undefined
-        );
+        const poll = async (): Promise<void> => {
+          const r = await fetch(`${API_BASE}/api/process/${jobId}`);
+          const d = await r.json();
+          if (!r.ok || !d.job) {
+            throw new Error(d.message || 'Status check failed');
+          }
+
+          const j = d.job;
+          setProgress(j.progress || 20);
+          setStatus(j.status || 'Processing…');
+
+          if (j.status === 'completed') {
+            setProgress(100);
+            setStatus('Done');
+            onUploadComplete({
+              url: j.finalUrl,
+              savingsPercent: j.savingsPercent ?? 0,
+              modelUsed: j.modelUsed,
+              didRestore: Boolean(j.didRestore ?? j.restored),
+              restored: Boolean(j.restored ?? j.didRestore),
+              originalSize: j.originalSize ?? file.size,
+              finalSize: j.finalSize,
+              codec: j.codec,
+              tier: tier,
+              isDemo: !isLoggedIn,
+              vmafScore: j.vmafScore,
+            });
+            return;
+          }
+
+          if (j.status === 'failed') {
+            throw new Error(j.error || 'Processing failed');
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          return poll();
+        };
+
+        await poll();
       } catch (err: any) {
-        console.error(err);
-        setError(err?.message || 'Processing failed');
+        if (err?.name === 'AbortError') {
+          setError('Cancelled');
+        } else {
+          console.error(err);
+          setError(err?.message || 'Processing failed');
+        }
       } finally {
         setUploading(false);
-        abortRef.current = null;
       }
     },
-    [
-      deviceProfile,
-      selectedModel,
-      uploadViaPresign,
-      pollUntilDone,
-    ]
+    [deviceProfile, selectedModel, onUploadComplete, tier, isLoggedIn]
   );
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) upload(f);
+    const file = e.dataTransfer.files?.[0];
+    if (file) upload(file);
   };
 
   return (
@@ -308,7 +190,7 @@ export default function UploadZone({
       >
         <p className="text-lg font-medium text-white mb-2">Drop a video here</p>
         <p className="text-sm text-white/50 mb-6">
-          Under 500 MB: compress on your device · 500 MB+: full cloud processing
+          Compress first (SVT-AV1 → VP9) · restore only when beneficial
         </p>
 
         <label className="inline-flex cursor-pointer px-6 py-3 rounded-2xl font-semibold text-black bg-gradient-to-r from-[#f97316] to-[#c084fc]">
