@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import SavingsCard from '@/components/ui/SavingsCard';
 
 interface HistoryItem {
   _id: string;
@@ -17,14 +18,26 @@ interface HistoryItem {
   status?: string;
   progress?: number;
   error?: string;
+  originalSize?: number;
+  compressedSize?: number;
+  finalSize?: number;
+  codec?: string;
+  restored?: boolean;
+  restoreMode?: string;
+  vmafScore?: number | null;
+  previewFrameUrls?: string[];
+  previewClipUrl?: string | null;
 }
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
+    setIsLoggedIn(!!localStorage.getItem('token'));
     loadHistory();
   }, []);
 
@@ -74,29 +87,39 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1c140f] text-white p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
+    <div className="min-h-screen bg-[#1c140f] text-white">
+      {/* Top bar — same pattern as Process */}
+      <div className="border-b border-white/10">
+        <div className="max-w-5xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-bold">Processing History</h1>
-            <p className="text-gray-400 mt-1">
-              Your past videos and download links (last 30 days)
-            </p>
+            <Link href="/" className="text-2xl font-bold tracking-tight hover:opacity-90">
+              Reagan<span className="text-[#c084fc]">XS</span>
+            </Link>
+            <p className="text-xs text-white/40 mt-1">Processing history</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Link
               href="/process"
-              className="px-6 py-3 bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black rounded-2xl font-medium"
+              className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"
             >
               New Processing
             </Link>
             <Link
               href="/"
-              className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-2xl"
+              className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
             >
               Home
             </Link>
           </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto p-6 sm:p-8">
+        <div className="mb-10">
+          <h1 className="text-4xl font-bold">Processing History</h1>
+          <p className="text-gray-400 mt-1">
+            Your past videos and download links (last 30 days)
+          </p>
         </div>
 
         {error && (
@@ -129,63 +152,104 @@ export default function HistoryPage() {
                 item.status &&
                 item.status !== 'completed' &&
                 item.status !== 'failed';
+              const isCompleted = item.status === 'completed' || !!downloadUrl;
+              const isExpanded = expandedId === item._id;
 
               return (
                 <div
                   key={item._id}
-                  className={`bg-white/5 border rounded-3xl p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition ${
+                  className={`bg-white/5 border rounded-3xl overflow-hidden transition ${
                     expired
                       ? 'opacity-60 border-red-500/30'
                       : 'border-white/10 hover:border-white/20'
                   }`}
                 >
-                  <div className="flex-1">
-                    <p className="font-medium text-lg">
-                      {item.originalFilename || 'Untitled Video'}
-                    </p>
-                    <p className="text-sm text-gray-400 mt-1">
-                      {item.modelUsed || 'Unknown model'}
-                      {item.savingsPercent != null &&
-                        ` • Saved ${item.savingsPercent}%`}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {new Date(item.createdAt).toLocaleString()}
-                      {item.status && item.status !== 'completed' && (
-                        <span className="ml-2 text-[#c084fc]">
-                          · {item.status}
-                          {item.progress != null ? ` (${item.progress}%)` : ''}
-                        </span>
+                  <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-lg truncate">
+                        {item.originalFilename || 'Untitled Video'}
+                      </p>
+                      <p className="text-sm text-gray-400 mt-1">
+                        {item.modelUsed || 'Unknown model'}
+                        {item.savingsPercent != null &&
+                          ` • Saved ${item.savingsPercent}%`}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {new Date(item.createdAt).toLocaleString()}
+                        {item.status && item.status !== 'completed' && (
+                          <span className="ml-2 text-[#c084fc]">
+                            · {item.status}
+                            {item.progress != null ? ` (${item.progress}%)` : ''}
+                          </span>
+                        )}
+                      </p>
+                      {item.error && (
+                        <p className="text-xs text-red-400 mt-1">{item.error}</p>
                       )}
-                    </p>
-                    {item.error && (
-                      <p className="text-xs text-red-400 mt-1">{item.error}</p>
-                    )}
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      {expired ? (
+                        <span className="text-red-400 text-sm font-medium px-4 py-2 bg-red-500/10 rounded-xl">
+                          Expired
+                        </span>
+                      ) : isProcessing ? (
+                        <span className="text-[#c084fc] text-sm px-4 py-2 bg-[#c084fc]/10 rounded-xl">
+                          {item.status}
+                        </span>
+                      ) : (
+                        <>
+                          {isCompleted && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedId(isExpanded ? null : item._id)
+                              }
+                              className="px-4 py-2.5 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
+                            >
+                              {isExpanded ? 'Hide card' : 'Results'}
+                            </button>
+                          )}
+                          {downloadUrl ? (
+                            <a
+                              href={downloadUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-6 py-2.5 bg-[#f97316] hover:bg-[#fb923c] text-black rounded-2xl text-sm font-medium transition"
+                            >
+                              Download
+                            </a>
+                          ) : (
+                            <span className="text-gray-500 text-sm">
+                              No link available
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    {expired ? (
-                      <span className="text-red-400 text-sm font-medium px-4 py-2 bg-red-500/10 rounded-xl">
-                        Expired
-                      </span>
-                    ) : isProcessing ? (
-                      <span className="text-[#c084fc] text-sm px-4 py-2 bg-[#c084fc]/10 rounded-xl">
-                        {item.status}
-                      </span>
-                    ) : downloadUrl ? (
-                      <a
-                        href={downloadUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-6 py-2.5 bg-[#f97316] hover:bg-[#fb923c] text-black rounded-2xl text-sm font-medium transition"
-                      >
-                        Download
-                      </a>
-                    ) : (
-                      <span className="text-gray-500 text-sm">
-                        No link available
-                      </span>
-                    )}
-                  </div>
+                  {isExpanded && isCompleted && !expired && (
+                    <div className="px-6 pb-6 border-t border-white/10 pt-4">
+                      <SavingsCard
+                        job={{
+                          url: downloadUrl,
+                          savingsPercent: item.savingsPercent,
+                          modelUsed: item.modelUsed,
+                          restored: item.restored,
+                          restoreMode: item.restoreMode,
+                          originalSize: item.originalSize,
+                          finalSize:
+                            item.finalSize ?? item.compressedSize ?? undefined,
+                          codec: item.codec,
+                          vmafScore: item.vmafScore,
+                          previewFrames: item.previewFrameUrls,
+                          previewClipUrl: item.previewClipUrl,
+                        }}
+                        isLoggedIn={isLoggedIn}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}

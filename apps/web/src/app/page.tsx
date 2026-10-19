@@ -52,6 +52,13 @@ export default function LandingPage() {
                 href="/settings"
                 className="text-gray-300 hover:text-white transition"
               >
+
+History
+    </Link>
+    <Link
+      href="/settings"
+      className="text-gray-300 hover:text-white transition"
+    >
                 Account
               </Link>
               <Link
