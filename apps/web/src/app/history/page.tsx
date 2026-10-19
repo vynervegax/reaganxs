@@ -34,23 +34,19 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
-    setIsLoggedIn(!!localStorage.getItem('token'));
     loadHistory();
   }, []);
 
   const loadHistory = async () => {
     try {
       const token = localStorage.getItem('token');
-
       if (!token) {
         setError('Please log in to view your history');
         setLoading(false);
         return;
       }
-
       const data = await api.getHistory(token);
       setHistory(Array.isArray(data) ? data : data.jobs || data.history || []);
     } catch (err: any) {
@@ -75,6 +71,21 @@ export default function HistoryPage() {
 
   const filteredHistory = history.filter((item) => !isOld(item.createdAt));
 
+  const toCardJob = (item: HistoryItem) => ({
+    url: getDownloadUrl(item),
+    savingsPercent: item.savingsPercent ?? 0,
+    modelUsed: item.modelUsed,
+    restored: Boolean(item.restored),
+    didRestore: Boolean(item.restored),
+    restoreMode: item.restoreMode,
+    originalSize: item.originalSize,
+    finalSize: item.finalSize ?? item.compressedSize,
+    codec: item.codec,
+    vmafScore: item.vmafScore ?? null,
+    previewFrames: item.previewFrameUrls || [],
+    previewClipUrl: item.previewClipUrl || null,
+  });
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#1c140f] text-white flex items-center justify-center">
@@ -87,39 +98,29 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1c140f] text-white">
-      {/* Top bar — same pattern as Process */}
-      <div className="border-b border-white/10">
-        <div className="max-w-5xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+    <div className="min-h-screen bg-[#1c140f] text-white p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
           <div>
-            <Link href="/" className="text-2xl font-bold tracking-tight hover:opacity-90">
-              Reagan<span className="text-[#c084fc]">XS</span>
-            </Link>
-            <p className="text-xs text-white/40 mt-1">Processing history</p>
+            <h1 className="text-4xl font-bold">Processing History</h1>
+            <p className="text-gray-400 mt-1">
+              Your past videos and download links (last 30 days)
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-3">
             <Link
               href="/process"
-              className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"
+              className="px-6 py-3 bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black rounded-2xl font-medium"
             >
               New Processing
             </Link>
             <Link
               href="/"
-              className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
+              className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-2xl"
             >
               Home
             </Link>
           </div>
-        </div>
-      </div>
-
-      <div className="max-w-4xl mx-auto p-6 sm:p-8">
-        <div className="mb-10">
-          <h1 className="text-4xl font-bold">Processing History</h1>
-          <p className="text-gray-400 mt-1">
-            Your past videos and download links (last 30 days)
-          </p>
         </div>
 
         {error && (
@@ -152,21 +153,22 @@ export default function HistoryPage() {
                 item.status &&
                 item.status !== 'completed' &&
                 item.status !== 'failed';
-              const isCompleted = item.status === 'completed' || !!downloadUrl;
               const isExpanded = expandedId === item._id;
+              const canShowCard =
+                item.status === 'completed' || (!item.status && !!downloadUrl);
 
               return (
                 <div
                   key={item._id}
-                  className={`bg-white/5 border rounded-3xl overflow-hidden transition ${
+                  className={`bg-white/5 border rounded-3xl transition ${
                     expired
                       ? 'opacity-60 border-red-500/30'
                       : 'border-white/10 hover:border-white/20'
                   }`}
                 >
                   <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-lg truncate">
+                    <div className="flex-1">
+                      <p className="font-medium text-lg">
                         {item.originalFilename || 'Untitled Video'}
                       </p>
                       <p className="text-sm text-gray-400 mt-1">
@@ -179,16 +181,20 @@ export default function HistoryPage() {
                         {item.status && item.status !== 'completed' && (
                           <span className="ml-2 text-[#c084fc]">
                             · {item.status}
-                            {item.progress != null ? ` (${item.progress}%)` : ''}
+                            {item.progress != null
+                              ? ` (${item.progress}%)`
+                              : ''}
                           </span>
                         )}
                       </p>
                       {item.error && (
-                        <p className="text-xs text-red-400 mt-1">{item.error}</p>
+                        <p className="text-xs text-red-400 mt-1">
+                          {item.error}
+                        </p>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex flex-wrap items-center gap-3">
                       {expired ? (
                         <span className="text-red-400 text-sm font-medium px-4 py-2 bg-red-500/10 rounded-xl">
                           Expired
@@ -199,18 +205,7 @@ export default function HistoryPage() {
                         </span>
                       ) : (
                         <>
-                          {isCompleted && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExpandedId(isExpanded ? null : item._id)
-                              }
-                              className="px-4 py-2.5 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
-                            >
-                              {isExpanded ? 'Hide card' : 'Results'}
-                            </button>
-                          )}
-                          {downloadUrl ? (
+                          {downloadUrl && (
                             <a
                               href={downloadUrl}
                               target="_blank"
@@ -219,7 +214,19 @@ export default function HistoryPage() {
                             >
                               Download
                             </a>
-                          ) : (
+                          )}
+                          {canShowCard && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedId(isExpanded ? null : item._id)
+                              }
+                              className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm transition"
+                            >
+                              {isExpanded ? 'Hide card' : 'Savings card'}
+                            </button>
+                          )}
+                          {!downloadUrl && !canShowCard && (
                             <span className="text-gray-500 text-sm">
                               No link available
                             </span>
@@ -229,25 +236,9 @@ export default function HistoryPage() {
                     </div>
                   </div>
 
-                  {isExpanded && isCompleted && !expired && (
+                  {isExpanded && canShowCard && (
                     <div className="px-6 pb-6 border-t border-white/10 pt-4">
-                      <SavingsCard
-                        job={{
-                          url: downloadUrl,
-                          savingsPercent: item.savingsPercent,
-                          modelUsed: item.modelUsed,
-                          restored: item.restored,
-                          restoreMode: item.restoreMode,
-                          originalSize: item.originalSize,
-                          finalSize:
-                            item.finalSize ?? item.compressedSize ?? undefined,
-                          codec: item.codec,
-                          vmafScore: item.vmafScore,
-                          previewFrames: item.previewFrameUrls,
-                          previewClipUrl: item.previewClipUrl,
-                        }}
-                        isLoggedIn={isLoggedIn}
-                      />
+                      <SavingsCard job={toCardJob(item)} isLoggedIn />
                     </div>
                   )}
                 </div>

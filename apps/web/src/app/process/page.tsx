@@ -1,7 +1,5 @@
 //process
 
-//process
-
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -128,23 +126,19 @@ export default function ProcessPage() {
           <div className="flex flex-wrap items-center gap-3">
             {deviceProfile && <DeviceStatus deviceProfile={deviceProfile} />}
             <Link
-              href="/"
-              className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
-            >
-              Home
-            </Link>
-            {isLoggedIn ? (
-              <>
-                <Link
-                  href="/history"
-                  className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
-                >
-                  History
-                </Link>
-                <Link
-                  href="/settings"
-                  className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
-                >
+  href="/"
+  className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
+>
+  Home
+</Link>
+{isLoggedIn && (
+  <Link
+    href="/history"
+    className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
+  >
+    History
+  </Link>
+)}
                   Settings
                 </Link>
                 <button
