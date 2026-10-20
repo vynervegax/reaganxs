@@ -36,7 +36,11 @@ function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
   });
 }
 
-/** Faster presets for larger files — speed first */
+/**
+ * Size-aware presets — balance speed vs quality.
+ * Mid band (400–800 MB) gets mild scale so ~470 MB doesn't take ~40 min
+ * while ~1 GB+ stays in the fast path you already saw.
+ */
 function presetsForSize(inputBytes: number): {
   av1Preset: string;
   av1Crf: string;
@@ -44,12 +48,28 @@ function presetsForSize(inputBytes: number): {
   scaleFilter?: string;
 } {
   const mb = inputBytes / (1024 * 1024);
+
+  // Small: quality bias
   if (mb < 100) {
     return { av1Preset: '8', av1Crf: '33', vp9Crf: '32' };
   }
-  if (mb < 500) {
+
+  // Medium: a bit faster, full resolution
+  if (mb < 400) {
     return { av1Preset: '10', av1Crf: '34', vp9Crf: '34' };
   }
+
+  // Mid-large (e.g. ~470 MB): preset 11 + cap width — closes the 40 min gap
+  if (mb < 800) {
+    return {
+      av1Preset: '11',
+      av1Crf: '34',
+      vp9Crf: '34',
+      scaleFilter: "scale='min(1280,iw)':-2:flags=lanczos",
+    };
+  }
+
+  // Very large (e.g. 1.27 GB): fastest practical path
   return {
     av1Preset: '12',
     av1Crf: '35',
@@ -77,7 +97,9 @@ export const compressionService = {
     }
     const p = presetsForSize(inputBytes);
     console.log(
-      `[compress] size=${(inputBytes / 1024 / 1024).toFixed(1)}MB preset=${p.av1Preset} crf=${p.av1Crf}`
+      `[compress] size=${(inputBytes / 1024 / 1024).toFixed(1)}MB preset=${p.av1Preset} crf=${p.av1Crf}${
+        p.scaleFilter ? ' scale=1280' : ''
+      }`
     );
 
     const audio = [
