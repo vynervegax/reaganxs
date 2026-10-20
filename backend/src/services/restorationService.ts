@@ -5,11 +5,12 @@ import {
   MODEL_FILES,
   MODELS_DIR,
   MODEL_DISPLAY,
-  RESTORE_ENCODE,
-  COMPRESS,
 } from '../config/constants';
 
-const RESTORE_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes — fail instead of hang forever
+/** Dev-like patience on Hobby — avoid cutting off successful long restores */
+const RESTORE_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes
+const FRAME_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per frame op
+const PARTIAL_EXTRACT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function run(args: string[], timeoutMs = RESTORE_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -54,7 +55,7 @@ function fileSize(p: string): number {
   }
 }
 
-/** SVT-AV1 → VP9 only. Never H.264 / H.265. Memory-friendlier for Hobby. */
+/** SVT-AV1 → VP9 — aligned with dev quality bias */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -75,9 +76,9 @@ async function encodeAv1OrVp9(
       '-c:v',
       'libsvtav1',
       '-preset',
-      '10', // faster than 8 on small RAM
+      '8',
       '-crf',
-      '32',
+      '30',
       '-svtav1-params',
       'lp=1',
       '-threads',
@@ -115,7 +116,7 @@ async function encodeAv1OrVp9(
     '-c:v',
     'libvpx-vp9',
     '-crf',
-    '34',
+    '32',
     '-b:v',
     '0',
     '-row-mt',
@@ -141,10 +142,6 @@ async function encodeAv1OrVp9(
   return 'libvpx-vp9';
 }
 
-/**
- * Stronger per-frame pass (FFmpeg-only until model worker is live).
- * Denoise → contrast → unsharp; fallback 2× Lanczos then down.
- */
 async function enhanceFramePng(
   src: string,
   dest: string,
@@ -158,7 +155,7 @@ async function enhanceFramePng(
   ].join(',');
 
   try {
-    await run(['-i', src, '-vf', vfA, dest], 2 * 60 * 1000); // 2 min per frame
+    await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
     if (fileSize(dest) > 0) return;
   } catch {
     /* fall through */
@@ -171,12 +168,11 @@ async function enhanceFramePng(
     'unsharp=5:5:1.0:5:5:0.5',
   ].join(',');
 
-  await run(['-i', src, '-vf', vfB, dest], 2 * 60 * 1000);
+  await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
 }
 
 export type RestoreOptions = {
   maxWidth?: number;
-  /** Preview / size control only — not default full output */
   maxSeconds?: number;
 };
 
@@ -200,10 +196,6 @@ export const restorationService = {
     return MODEL_DISPLAY[modelId] || modelId;
   },
 
-  /**
-   * Full-timeline restore (file in → file out).
-   * Tries model worker; falls back to quality-preserving FFmpeg enhance.
-   */
   async restore(
     inputPath: string,
     model: string,
@@ -233,10 +225,6 @@ export const restorationService = {
     return outPath;
   },
 
-  /**
-   * Hook for real BHI / PurePhoto / RGT / ATD inference.
-   * Throws until weights + worker are wired.
-   */
   async runModelWorker(
     _input: string,
     _out: string,
@@ -250,10 +238,6 @@ export const restorationService = {
     throw new Error(`Model worker not configured for ${model}`);
   },
 
-  /**
-   * Quality-preserving full-file enhance + re-encode (AV1/VP9 only).
-   * Optional maxSeconds for preview-only paths.
-   */
   async ffmpegEnhance(
     inputPath: string,
     outPath: string,
@@ -266,7 +250,7 @@ export const restorationService = {
       const slice = path.join(workDir, `slice_${Date.now()}.mp4`);
       await run(
         ['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice],
-        2 * 60 * 1000
+        FRAME_TIMEOUT_MS
       );
       source = slice;
     }
@@ -282,11 +266,6 @@ export const restorationService = {
     await encodeAv1OrVp9(source, outPath, vf);
   },
 
-  /**
-   * Desktop-style partial frame restore.
-   * Extracts N frames across the video, enhances each, writes PNGs.
-   * Does not replace the full-video deliverable by itself.
-   */
   async restorePartialFrames(
     compressedPath: string,
     model: string,
@@ -317,7 +296,7 @@ export const restorationService = {
         String(frameCount),
         patternIn,
       ],
-      3 * 60 * 1000
+      PARTIAL_EXTRACT_TIMEOUT_MS
     );
 
     const inputs = fs
@@ -340,8 +319,6 @@ export const restorationService = {
       );
 
       try {
-        // When weights are ready:
-        // await this.runFrameModel(src, dest, model);
         await enhanceFramePng(src, dest, maxWidth);
       } catch {
         try {
@@ -369,9 +346,6 @@ export const restorationService = {
     };
   },
 
-  /**
-   * Optional short quality-sample clip from restored frames (AV1/VP9, no audio).
-   */
   async framesToPreviewClip(
     framePaths: string[],
     outPath: string,
@@ -406,9 +380,9 @@ export const restorationService = {
           '-c:v',
           'libsvtav1',
           '-preset',
-          '10',
+          '8',
           '-crf',
-          '35',
+          '32',
           '-svtav1-params',
           'lp=1',
           '-threads',
@@ -416,7 +390,7 @@ export const restorationService = {
           '-an',
           raw,
         ],
-        3 * 60 * 1000
+        PARTIAL_EXTRACT_TIMEOUT_MS
       );
     } catch {
       await run(
@@ -432,13 +406,13 @@ export const restorationService = {
           '-c:v',
           'libvpx-vp9',
           '-crf',
-          '34',
+          '32',
           '-b:v',
           '0',
           '-an',
           raw,
         ],
-        3 * 60 * 1000
+        PARTIAL_EXTRACT_TIMEOUT_MS
       );
     }
 
