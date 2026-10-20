@@ -1,11 +1,9 @@
 import path from 'path';
 import os from 'os';
 
-
 export const PREMIUM_PRICE_CENTS = 299; // $2.99
 export const PREMIUM_PRICE_ID = process.env.STRIPE_PRICE_ID || ''; // optional fixed Price ID
 export const TEMP_PREMIUM_DAYS = 7;
-
 
 export const JWT_SECRET: string =
   process.env.JWT_SECRET || 'reaganxs-dev-secret-change-me';
@@ -20,7 +18,7 @@ export const MAX_UPLOAD_BYTES = process.env.MAX_UPLOAD_MB
   ? Number(process.env.MAX_UPLOAD_MB) * 1024 * 1024
   : 2 * 1024 * 1024 * 1024;
 
-/** Match desktop compress path */
+/** Match development / desktop compress path (sweet spot) */
 export const COMPRESS = {
   av1: {
     codec: 'libsvtav1' as const,
@@ -53,7 +51,7 @@ export const MODEL_IDS = {
 } as const;
 
 export const MODEL_FILES: Record<string, string> = {
-  'rgt-webphoto': '4xRealWebPhoto_v2_rtg_s.pth',       
+  'rgt-webphoto': '4xRealWebPhoto_v2_rtg_s.pth',
   'atd-webphoto': '4xRealWebPhoto_v3_atd.safetensors',
   'rgt-s': 'RGT_S_x4.pth',
   'atd-srx4': '003_ATD_SRx4_finetune.pth',
