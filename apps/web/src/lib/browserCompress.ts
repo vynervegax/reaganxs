@@ -57,25 +57,43 @@ export async function compressInBrowser(
 
   onStatus?.('Compressing on your device…');
 
-  // VP9 is the practical default for ffmpeg.wasm
   await ff.exec([
-    '-i', inputName,
-    '-c:v', 'libvpx-vp9',
-    '-crf', '32',
-    '-b:v', '0',
-    '-row-mt', '1',
-    '-c:a', 'libopus',
-    '-b:a', '96k',
-    '-ac', '2',
-    '-ar', '48000',
+    '-i',
+    inputName,
+    '-c:v',
+    'libvpx-vp9',
+    '-crf',
+    '32',
+    '-b:v',
+    '0',
+    '-row-mt',
+    '1',
+    '-c:a',
+    'libopus',
+    '-b:a',
+    '96k',
+    '-ac',
+    '2',
+    '-ar',
+    '48000',
     '-y',
     outputName,
   ]);
 
   const data = await ff.readFile(outputName);
-  const blob = new Blob([data], { type: 'video/webm' });
 
-  // cleanup
+  // TS 5.x: FileData / Uint8Array vs BlobPart
+  const u8 =
+    typeof data === 'string'
+      ? new TextEncoder().encode(data)
+      : data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data as ArrayBuffer);
+
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  const blob = new Blob([copy], { type: 'video/webm' });
+
   try {
     await ff.deleteFile(inputName);
     await ff.deleteFile(outputName);
