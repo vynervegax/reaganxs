@@ -87,8 +87,6 @@ async function runPartialRestore(opts: {
       2
     );
     temps.push(clipLocal);
-    // Never let preview compete with storage win on the main deliverable;
-    // still upload sample if small enough relative to original
     if (sizeOf(clipLocal) > 0 && sizeOf(clipLocal) <= originalSize) {
       previewClipUrl = await r2Service.uploadWithExpiry(
         clipLocal,
@@ -140,7 +138,6 @@ export const videoWorker = new Worker<VideoJobData>(
     try {
       let compressedSize = 0;
 
-      // ── Compress (dev sweet spot via compressionService + constants) ─
       if (skipCompress) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'routing',
@@ -171,7 +168,6 @@ export const videoWorker = new Worker<VideoJobData>(
         });
       }
 
-      // ── Routing ──────────────────────────────────────────────────────
       const user = userId
         ? { id: userId, tier, preferredModel }
         : preferredModel
@@ -188,7 +184,10 @@ export const videoWorker = new Worker<VideoJobData>(
       let restoreSkippedReason: string | null = decision.reason || null;
       const model = decision.model;
 
-      // ── Restore: dev-like — always try FULL first when model exists ──
+      /**
+       * High restoration if full is fast + not bigger than original.
+       * On time budget / error / oversized → partial (job still completes).
+       */
       if (model) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'restoring',
@@ -200,14 +199,11 @@ export const videoWorker = new Worker<VideoJobData>(
           const fullPath = await restorationService.restore(
             compressedPath,
             model,
-            {
-              maxWidth: tier === 'demo' ? 960 : 1280,
-            }
+            { maxWidth: tier === 'demo' ? 960 : 1280 }
           );
           temps.push(fullPath);
           const fullSize = sizeOf(fullPath);
 
-          // Critical: never keep a restore larger than the original
           if (fullSize > 0 && fullSize <= originalSize) {
             processedPath = fullPath;
             modelUsed = model;
@@ -216,13 +212,14 @@ export const videoWorker = new Worker<VideoJobData>(
             restoreSkippedReason = null;
             fullAccepted = true;
           } else {
-            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial samples`;
+            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial`;
             safeUnlink(fullPath);
           }
         } catch (e: any) {
+          // Timeout or error → switch to partial (do not fail the job)
           restoreSkippedReason =
-            e?.message || 'Full restore failed — partial samples';
-          console.warn('[worker]', restoreSkippedReason);
+            e?.message || 'Full restore time budget — partial';
+          console.warn('[worker] full → partial:', restoreSkippedReason);
         }
 
         if (!fullAccepted) {
@@ -237,7 +234,7 @@ export const videoWorker = new Worker<VideoJobData>(
             });
             previewFrameUrls = partial.previewFrameUrls;
             previewClipUrl = partial.previewClipUrl;
-            processedPath = compressedPath; // main file stays compressed (size win)
+            processedPath = compressedPath;
             modelUsed = `${model}-partial`;
             didRestore = true;
             restoreMode = 'partial-frames';
@@ -256,7 +253,6 @@ export const videoWorker = new Worker<VideoJobData>(
         }
       }
 
-      // ── Final size gate ──────────────────────────────────────────────
       let finalSize = sizeOf(processedPath);
       if (finalSize > originalSize) {
         processedPath = compressedPath;

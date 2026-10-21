@@ -123,22 +123,28 @@ export default function ProcessPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+                   <div className="flex flex-wrap items-center gap-3">
             {deviceProfile && <DeviceStatus deviceProfile={deviceProfile} />}
             <Link
-  href="/"
-  className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
->
-  Home
-</Link>
-{isLoggedIn && (
-  <Link
-    href="/history"
-    className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
-  >
-    History
-  </Link>
-)}
+              href="/"
+              className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-white/25 transition"
+            >
+              Home
+            </Link>
+            {isLoggedIn && (
+              <Link
+                href="/history"
+                className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
+              >
+                History
+              </Link>
+            )}
+            {isLoggedIn ? (
+              <>
+                <Link
+                  href="/settings"
+                  className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm hover:border-[#c084fc]/40 transition"
+                >
                   Settings
                 </Link>
                 <button
@@ -166,8 +172,6 @@ export default function ProcessPage() {
               </>
             )}
           </div>
-        </div>
-      </div>
 
       <div className="max-w-5xl mx-auto p-6">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">

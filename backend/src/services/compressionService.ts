@@ -3,10 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-// Production only: prevent infinite hangs on Railway Hobby
-const COMPRESS_TIMEOUT_MS = 60 * 60 * 1000; // 60 min
+const AV1_TIMEOUT_MS = 45 * 60 * 1000; // 45 min
+const VP9_TIMEOUT_MS = 20 * 60 * 1000; // 20 min fast fallback
 
-function run(args: string[], timeoutMs = COMPRESS_TIMEOUT_MS): Promise<void> {
+function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[compress]', args.join(' '));
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -55,24 +55,26 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
-    // Same ladder as development (COMPRESS.*) — full res, no size-based scale.
-    // Production extras only: timeout + light RAM limits for Hobby.
     try {
-      await run([
-        '-hide_banner', '-y',
-        '-i', inputPath,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', COMPRESS.av1.codec,
-        '-preset', COMPRESS.av1.preset,
-        '-crf', COMPRESS.av1.crf,
-        '-svtav1-params', 'lp=1',
-        '-threads', '2',
-        ...audio,
-        '-movflags', '+faststart',
-        '-sn',
-        av1,
-      ]);
+      await run(
+        [
+          '-hide_banner', '-y',
+          '-i', inputPath,
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+          '-c:v', COMPRESS.av1.codec,
+          '-preset', COMPRESS.av1.preset,
+          '-crf', COMPRESS.av1.crf,
+          '-pix_fmt', 'yuv420p',
+          '-svtav1-params', 'lp=1',
+          '-threads', '2',
+          ...audio,
+          '-movflags', '+faststart',
+          '-sn',
+          av1,
+        ],
+        AV1_TIMEOUT_MS
+      );
 
       if (fs.existsSync(av1) && fs.statSync(av1).size > 0) {
         return {
@@ -85,20 +87,26 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    await run([
-      '-hide_banner', '-y',
-      '-i', inputPath,
-      '-map', '0:v:0',
-      '-map', '0:a:0?',
-      '-c:v', COMPRESS.vp9.codec,
-      '-crf', COMPRESS.vp9.crf,
-      '-b:v', '0',
-      '-row-mt', '1',
-      '-threads', '2',
-      ...audio,
-      '-sn',
-      vp9,
-    ]);
+    await run(
+      [
+        '-hide_banner', '-y',
+        '-i', inputPath,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
+        '-c:v', COMPRESS.vp9.codec,
+        '-crf', COMPRESS.vp9.crf,
+        '-b:v', '0',
+        '-cpu-used', '5',
+        '-deadline', 'good',
+        '-row-mt', '1',
+        '-threads', '2',
+        '-pix_fmt', 'yuv420p',
+        ...audio,
+        '-sn',
+        vp9,
+      ],
+      VP9_TIMEOUT_MS
+    );
 
     if (!fs.existsSync(vp9) || fs.statSync(vp9).size === 0) {
       throw new Error('Compression failed (empty output)');

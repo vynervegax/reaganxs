@@ -7,12 +7,12 @@ import {
   MODEL_DISPLAY,
 } from '../config/constants';
 
-/** Dev-like patience on Hobby — avoid cutting off successful long restores */
-const RESTORE_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes
-const FRAME_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per frame op
-const PARTIAL_EXTRACT_TIMEOUT_MS = 10 * 60 * 1000;
+/** Full enhance: short budget — worker falls back to partial (no job timeout failure) */
+const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
+const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
-function run(args: string[], timeoutMs = RESTORE_TIMEOUT_MS): Promise<void> {
+function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[restore]', args.join(' '));
     const p = spawn('ffmpeg', ['-hide_banner', '-y', ...args], {
@@ -55,7 +55,6 @@ function fileSize(p: string): number {
   }
 }
 
-/** SVT-AV1 → VP9 — aligned with dev quality bias */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -65,37 +64,28 @@ async function encodeAv1OrVp9(
   const av1 = outPath.replace(/(\.\w+)?$/, '_av1.mp4');
 
   try {
-    await run([
-      '-i',
-      inputPath,
-      ...videoFilter,
-      '-map',
-      '0:v:0',
-      '-map',
-      '0:a:0?',
-      '-c:v',
-      'libsvtav1',
-      '-preset',
-      '8',
-      '-crf',
-      '30',
-      '-svtav1-params',
-      'lp=1',
-      '-threads',
-      '2',
-      '-c:a',
-      'libopus',
-      '-b:a',
-      '96k',
-      '-ac',
-      '2',
-      '-ar',
-      '48000',
-      '-movflags',
-      '+faststart',
-      '-sn',
-      av1,
-    ]);
+    await run(
+      [
+        '-i', inputPath,
+        ...videoFilter,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
+        '-c:v', 'libsvtav1',
+        '-preset', '8',
+        '-crf', '30',
+        '-pix_fmt', 'yuv420p',
+        '-svtav1-params', 'lp=1',
+        '-threads', '2',
+        '-c:a', 'libopus',
+        '-b:a', '96k',
+        '-ac', '2',
+        '-ar', '48000',
+        '-movflags', '+faststart',
+        '-sn',
+        av1,
+      ],
+      FULL_RESTORE_TIMEOUT_MS
+    );
     if (fileSize(av1) > 0) {
       fs.renameSync(av1, outPath);
       return 'libsvtav1';
@@ -105,35 +95,29 @@ async function encodeAv1OrVp9(
   }
 
   const vp9 = outPath.replace(/(\.\w+)?$/, '_vp9.webm');
-  await run([
-    '-i',
-    inputPath,
-    ...videoFilter,
-    '-map',
-    '0:v:0',
-    '-map',
-    '0:a:0?',
-    '-c:v',
-    'libvpx-vp9',
-    '-crf',
-    '32',
-    '-b:v',
-    '0',
-    '-row-mt',
-    '1',
-    '-threads',
-    '2',
-    '-c:a',
-    'libopus',
-    '-b:a',
-    '96k',
-    '-ac',
-    '2',
-    '-ar',
-    '48000',
-    '-sn',
-    vp9,
-  ]);
+  await run(
+    [
+      '-i', inputPath,
+      ...videoFilter,
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      '-c:v', 'libvpx-vp9',
+      '-crf', '32',
+      '-b:v', '0',
+      '-cpu-used', '5',
+      '-deadline', 'good',
+      '-row-mt', '1',
+      '-threads', '2',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'libopus',
+      '-b:a', '96k',
+      '-ac', '2',
+      '-ar', '48000',
+      '-sn',
+      vp9,
+    ],
+    FULL_RESTORE_TIMEOUT_MS
+  );
 
   if (fileSize(vp9) === 0) {
     throw new Error('Restore encode empty');
@@ -188,7 +172,7 @@ export const restorationService = {
   weightPath(modelId: string) {
     return path.join(
       MODELS_DIR,
-      MODEL_FILES[modelId] || MODEL_FILES['4x-bhi']
+      MODEL_FILES[modelId] || MODEL_FILES['atd-webphoto']
     );
   },
 
@@ -288,12 +272,9 @@ export const restorationService = {
     const patternIn = path.join(framesIn, 'frame_%03d.png');
     await run(
       [
-        '-i',
-        compressedPath,
-        '-vf',
-        `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-        '-frames:v',
-        String(frameCount),
+        '-i', compressedPath,
+        '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+        '-frames:v', String(frameCount),
         patternIn,
       ],
       PARTIAL_EXTRACT_TIMEOUT_MS
@@ -369,24 +350,14 @@ export const restorationService = {
     try {
       await run(
         [
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-r',
-          String(fps),
-          '-i',
-          listFile,
-          '-c:v',
-          'libsvtav1',
-          '-preset',
-          '8',
-          '-crf',
-          '32',
-          '-svtav1-params',
-          'lp=1',
-          '-threads',
-          '2',
+          '-f', 'concat', '-safe', '0',
+          '-r', String(fps),
+          '-i', listFile,
+          '-c:v', 'libsvtav1',
+          '-preset', '10',
+          '-crf', '32',
+          '-svtav1-params', 'lp=1',
+          '-threads', '2',
           '-an',
           raw,
         ],
@@ -395,20 +366,13 @@ export const restorationService = {
     } catch {
       await run(
         [
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-r',
-          String(fps),
-          '-i',
-          listFile,
-          '-c:v',
-          'libvpx-vp9',
-          '-crf',
-          '32',
-          '-b:v',
-          '0',
+          '-f', 'concat', '-safe', '0',
+          '-r', String(fps),
+          '-i', listFile,
+          '-c:v', 'libvpx-vp9',
+          '-crf', '32',
+          '-b:v', '0',
+          '-cpu-used', '5',
           '-an',
           raw,
         ],
