@@ -106,7 +106,6 @@ export default function ProcessPage() {
 
   return (
     <div className="min-h-screen bg-[#1c140f] text-white">
-      {/* Top bar */}
       <div className="border-b border-white/10">
         <div className="max-w-5xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -123,7 +122,7 @@ export default function ProcessPage() {
             </p>
           </div>
 
-                   <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {deviceProfile && <DeviceStatus deviceProfile={deviceProfile} />}
             <Link
               href="/"
@@ -172,6 +171,8 @@ export default function ProcessPage() {
               </>
             )}
           </div>
+        </div>
+      </div>
 
       <div className="max-w-5xl mx-auto p-6">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
