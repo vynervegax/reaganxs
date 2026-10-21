@@ -23,11 +23,11 @@ export const COMPRESS = {
   av1: {
     codec: 'libsvtav1' as const,
     preset: '8',
-    crf: '33',
+    crf: '31', // was 33 — a bit more bitrate / less “96%” crush
   },
   vp9: {
     codec: 'libvpx-vp9' as const,
-    crf: '32',
+    crf: '31',
   },
   audio: {
     codec: 'libopus' as const,
