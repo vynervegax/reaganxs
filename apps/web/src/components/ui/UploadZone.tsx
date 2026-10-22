@@ -40,8 +40,8 @@ const API_BASE = (
   .replace(/\/$/, '')
   .replace(/\s+/g, '');
 
-/** Above this size: upload direct to R2 (avoid Railway body abort) */
-const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024; // 200 MB
+/** Presign at ≥ 200 MB (your choice) */
+const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 export default function UploadZone({
   onUploadComplete,
@@ -85,11 +85,30 @@ export default function UploadZone({
 
         const j = d.job;
         setProgress(Math.min(99, Math.max(25, j.progress || 25)));
-        setStatus(j.status || 'Processing…');
+
+        // Clearer stage labels (no pipeline change)
+        const st = String(j.status || '');
+        if (st === 'compressing') setStatus('Compressing…');
+        else if (st === 'restoring') {
+          setStatus(
+            j.restoreMode === 'partial-frames'
+              ? 'Quality samples (partial restore)…'
+              : 'Restoring (full if fast enough)…'
+          );
+        } else if (st === 'uploading') setStatus('Uploading result…');
+        else if (st === 'routing') setStatus('Routing…');
+        else if (st === 'queued') setStatus('Queued…');
+        else setStatus(st || 'Processing…');
 
         if (j.status === 'completed') {
           setProgress(100);
-          setStatus('Done');
+          setStatus(
+            j.restoreMode === 'full'
+              ? 'Done · full restore'
+              : j.restoreMode === 'partial-frames'
+                ? 'Done · compressed + quality samples'
+                : 'Done'
+          );
           onUploadComplete({
             url: j.finalUrl,
             savingsPercent: j.savingsPercent ?? 0,
@@ -97,7 +116,7 @@ export default function UploadZone({
             didRestore: Boolean(j.didRestore ?? j.restored),
             restored: Boolean(j.restored ?? j.didRestore),
             originalSize: j.originalSize ?? file.size,
-            finalSize: j.finalSize,
+            finalSize: j.finalSize ?? j.compressedSize,
             codec: j.codec,
             tier,
             isDemo: !isLoggedIn,
@@ -116,7 +135,7 @@ export default function UploadZone({
     [onUploadComplete, tier, isLoggedIn]
   );
 
-  /** Classic path — small files through Railway */
+  /** Classic path — under 200 MB through Railway */
   const uploadClassic = useCallback(
     async (file: File) => {
       setStatus('Uploading…');
@@ -132,16 +151,17 @@ export default function UploadZone({
       }
       if (selectedModel) form.append('model', selectedModel);
 
+      // Only 1 retry — repeated aborts make logs/UX worse
       const res = await resilientFetch(`${API_BASE}/api/process`, {
         method: 'POST',
         headers: authHeaders(),
         body: form,
         signal: ac.signal,
-        retries: 4,
-        baseDelayMs: 1500,
-        maxDelayMs: 10000,
-        onRetry: ({ attempt, retriesLeft }) => {
-          setStatus(`Retry ${attempt} (${retriesLeft} left)…`);
+        retries: 1,
+        baseDelayMs: 2000,
+        maxDelayMs: 4000,
+        onRetry: () => {
+          setStatus('Upload interrupted — retrying once…');
         },
       });
 
@@ -157,7 +177,7 @@ export default function UploadZone({
     [authHeaders, deviceProfile, selectedModel, pollUntilDone]
   );
 
-  /** Large path — direct to R2, then cloud compress */
+  /** Large path — ≥ 200 MB direct to R2 */
   const uploadLargeViaR2 = useCallback(
     async (file: File) => {
       setStatus('Large file — preparing direct upload…');
@@ -168,7 +188,6 @@ export default function UploadZone({
         'Content-Type': 'application/json',
       };
 
-      // 1) Presign
       const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
         method: 'POST',
         headers,
@@ -186,7 +205,6 @@ export default function UploadZone({
       }
       const { uploadUrl, key } = presignData;
 
-      // 2) PUT to R2 with progress
       setStatus('Uploading directly to storage…');
       setProgress(5);
 
@@ -199,7 +217,6 @@ export default function UploadZone({
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             const pct = Math.round((e.loaded / e.total) * 100);
-            // Map upload 0–100% → progress 5–55
             setProgress(5 + Math.round((e.loaded / e.total) * 50));
             setStatus(`Uploading… ${pct}%`);
           }
@@ -218,7 +235,6 @@ export default function UploadZone({
         xhr.send(file);
       });
 
-      // 3) Start job — cloud will compress (skipCompress: false)
       setStatus('Starting cloud processing…');
       setProgress(58);
 
@@ -335,7 +351,8 @@ export default function UploadZone({
       )}
 
       <p className="text-[11px] text-white/30 text-center">
-        Restorative Encoder Applying Generative AI for Near-Lossless Sequences (REAGANXS)
+        Restorative Encoder Applying Generative AI for Near-Lossless Sequences
+        (REAGANXS)
       </p>
     </div>
   );
