@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 45 * 60 * 1000; // 45 min
-const VP9_TIMEOUT_MS = 20 * 60 * 1000; // 20 min fast fallback
+const AV1_TIMEOUT_MS = 45 * 60 * 1000;
+const VP9_TIMEOUT_MS = 20 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -55,6 +55,7 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
+    // Full resolution — no scale filter
     try {
       await run(
         [

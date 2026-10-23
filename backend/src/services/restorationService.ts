@@ -7,8 +7,7 @@ import {
   MODEL_DISPLAY,
 } from '../config/constants';
 
-/** Full enhance: short budget — worker falls back to partial (no job timeout failure) */
-const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000;
 const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
 const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -72,7 +71,7 @@ async function encodeAv1OrVp9(
         '-map', '0:a:0?',
         '-c:v', 'libsvtav1',
         '-preset', '8',
-        '-crf', '30',
+        '-crf', '28',
         '-pix_fmt', 'yuv420p',
         '-svtav1-params', 'lp=1',
         '-threads', '2',
@@ -102,7 +101,7 @@ async function encodeAv1OrVp9(
       '-map', '0:v:0',
       '-map', '0:a:0?',
       '-c:v', 'libvpx-vp9',
-      '-crf', '32',
+      '-crf', '28',
       '-b:v', '0',
       '-cpu-used', '5',
       '-deadline', 'good',
@@ -239,7 +238,7 @@ export const restorationService = {
       source = slice;
     }
 
-    const maxWidth = opts.maxWidth ?? 1280;
+    const maxWidth = opts.maxWidth ?? 1920;
     const vf = [
       `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
       'hqdn3d=1.2:1.2:2.5:2.5',
@@ -355,7 +354,7 @@ export const restorationService = {
           '-i', listFile,
           '-c:v', 'libsvtav1',
           '-preset', '10',
-          '-crf', '32',
+          '-crf', '28',
           '-svtav1-params', 'lp=1',
           '-threads', '2',
           '-an',
@@ -370,7 +369,7 @@ export const restorationService = {
           '-r', String(fps),
           '-i', listFile,
           '-c:v', 'libvpx-vp9',
-          '-crf', '32',
+          '-crf', '28',
           '-b:v', '0',
           '-cpu-used', '5',
           '-an',

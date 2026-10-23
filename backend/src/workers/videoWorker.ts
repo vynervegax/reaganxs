@@ -184,10 +184,7 @@ export const videoWorker = new Worker<VideoJobData>(
       let restoreSkippedReason: string | null = decision.reason || null;
       const model = decision.model;
 
-      /**
-       * High restoration if full is fast + not bigger than original.
-       * On time budget / error / oversized → partial (job still completes).
-       */
+      // Full if fast + size ≤ original; else partial (no fail on restore timeout)
       if (model) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'restoring',
@@ -199,7 +196,7 @@ export const videoWorker = new Worker<VideoJobData>(
           const fullPath = await restorationService.restore(
             compressedPath,
             model,
-            { maxWidth: tier === 'demo' ? 960 : 1280 }
+            { maxWidth: tier === 'demo' ? 960 : 1920 }
           );
           temps.push(fullPath);
           const fullSize = sizeOf(fullPath);
@@ -216,7 +213,6 @@ export const videoWorker = new Worker<VideoJobData>(
             safeUnlink(fullPath);
           }
         } catch (e: any) {
-          // Timeout or error → switch to partial (do not fail the job)
           restoreSkippedReason =
             e?.message || 'Full restore time budget — partial';
           console.warn('[worker] full → partial:', restoreSkippedReason);
@@ -282,6 +278,10 @@ export const videoWorker = new Worker<VideoJobData>(
               Math.round((1 - finalSize / originalSize) * 1000) / 10
             )
           : 0;
+
+      console.log(
+        `[worker] done job=${jobId} in=${(originalSize / 1024 / 1024).toFixed(1)}MB out=${(finalSize / 1024 / 1024).toFixed(1)}MB saved=${savingsPercent}% mode=${restoreMode}`
+      );
 
       let vmafScore: number | null = null;
       if (

@@ -32,10 +32,6 @@ export type BrowserCompressResult = {
   compressedSize: number;
 };
 
-/**
- * Compress a video in the browser (device compute).
- * Prefers VP9 (widely available in wasm builds); falls back gracefully.
- */
 export async function compressInBrowser(
   file: File,
   onProgress?: (ratio: number) => void,
@@ -58,31 +54,21 @@ export async function compressInBrowser(
   onStatus?.('Compressing on your device…');
 
   await ff.exec([
-    '-i',
-    inputName,
-    '-c:v',
-    'libvpx-vp9',
-    '-crf',
-    '32',
-    '-b:v',
-    '0',
-    '-row-mt',
-    '1',
-    '-c:a',
-    'libopus',
-    '-b:a',
-    '96k',
-    '-ac',
-    '2',
-    '-ar',
-    '48000',
+    '-i', inputName,
+    '-c:v', 'libvpx-vp9',
+    '-crf', '28',
+    '-b:v', '0',
+    '-row-mt', '1',
+    '-c:a', 'libopus',
+    '-b:a', '96k',
+    '-ac', '2',
+    '-ar', '48000',
     '-y',
     outputName,
   ]);
 
   const data = await ff.readFile(outputName);
 
-  // TS 5.x: FileData / Uint8Array vs BlobPart
   const u8 =
     typeof data === 'string'
       ? new TextEncoder().encode(data)
