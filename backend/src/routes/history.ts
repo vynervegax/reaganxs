@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Response, Request } from 'express';
 import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import { ProcessingJob } from '../models/ProcessingJob';
@@ -6,7 +6,7 @@ import { removeQueuedBullJobs, videoQueue } from '../queue/videoQueue';
 
 const router = Router();
 
-type Authed = {
+type AuthedRequest = Request & {
   user?: {
     id?: string;
     _id?: string;
@@ -15,7 +15,7 @@ type Authed = {
   };
 };
 
-router.get('/', authenticate, async (req: Authed, res: Response) => {
+router.get('/', authenticate, async (req: AuthedRequest, res: Response) => {
   try {
     const rawId = req.user?._id || req.user?.id;
     if (!rawId) {
@@ -71,14 +71,19 @@ router.get('/demo', async (_req, res) => {
 });
 
 /** Delete from history; if still queued, also remove from BullMQ */
-router.delete('/:id', authenticate, async (req: Authed, res: Response) => {
+router.delete('/:id', authenticate, async (req: AuthedRequest, res: Response) => {
   try {
     const rawId = req.user?._id || req.user?.id;
     if (!rawId) {
       return res.status(401).json({ success: false, message: 'Auth required' });
     }
 
-    const job = await ProcessingJob.findById(req.params.id);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Missing job id' });
+    }
+
+    const job = await ProcessingJob.findById(String(id));
     if (!job) {
       return res.status(404).json({ success: false, message: 'Not found' });
     }

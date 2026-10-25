@@ -113,13 +113,12 @@ export const processController = {
       return res.json({ success: true, status, message: 'Already finished' });
     }
 
-    let removed = 0;
+       let removed = 0;
     try {
       if (job.bullJobId) {
         const bj = await videoQueue.getJob(String(job.bullJobId));
         if (bj) {
-          const state = await bj.getState();
-          // BullMQ JobState has no 'paused' in this version
+          const state = String(await bj.getState());
           if (state === 'waiting' || state === 'delayed') {
             await bj.remove();
             removed = 1;
