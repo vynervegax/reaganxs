@@ -40,8 +40,7 @@ const API_BASE = (
   .replace(/\/$/, '')
   .replace(/\s+/g, '');
 
-/** Above this size: upload direct to R2 (avoid Railway body abort) */
-const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024; // 200 MB
+const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 export default function UploadZone({
   onUploadComplete,
@@ -55,7 +54,9 @@ export default function UploadZone({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | XMLHttpRequest | null>(null);
+  const cancelledRef = useRef(false);
 
   const authHeaders = useCallback((): Record<string, string> => {
     const token =
@@ -65,9 +66,50 @@ export default function UploadZone({
     return h;
   }, []);
 
+  const resetUi = useCallback(() => {
+    setUploading(false);
+    setProgress(0);
+    setStatus('');
+    setActiveJobId(null);
+    abortRef.current = null;
+    cancelledRef.current = false;
+  }, []);
+
+  const cancelJob = useCallback(async () => {
+    cancelledRef.current = true;
+    const id = activeJobId;
+    if (id) {
+      try {
+        await fetch(`${API_BASE}/api/process/${id}/cancel`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      if (abortRef.current instanceof AbortController) {
+        abortRef.current.abort();
+      } else if (abortRef.current && 'abort' in abortRef.current) {
+        (abortRef.current as XMLHttpRequest).abort();
+      }
+    } catch {
+      /* ignore */
+    }
+    resetUi();
+    setError(null);
+  }, [activeJobId, authHeaders, resetUi]);
+
   const pollUntilDone = useCallback(
     async (jobId: string, file: File): Promise<void> => {
+      setActiveJobId(jobId);
+
       const poll = async (): Promise<void> => {
+        if (cancelledRef.current) {
+          throw new Error('Cancelled');
+        }
+
         const r = await fetch(`${API_BASE}/api/process/${jobId}`);
         if (r.status === 429) {
           setStatus('Checking status…');
@@ -84,12 +126,13 @@ export default function UploadZone({
         }
 
         const j = d.job;
-        setProgress(Math.min(99, Math.max(25, j.progress || 25)));
+        setProgress(Math.min(99, Math.max(10, j.progress || 10)));
         setStatus(j.status || 'Processing…');
 
         if (j.status === 'completed') {
           setProgress(100);
           setStatus('Done');
+          setActiveJobId(null);
           onUploadComplete({
             url: j.finalUrl,
             savingsPercent: j.savingsPercent ?? 0,
@@ -108,6 +151,9 @@ export default function UploadZone({
         if (j.status === 'failed') {
           throw new Error(j.error || 'Processing failed');
         }
+        if (j.status === 'cancelled') {
+          throw new Error('Cancelled');
+        }
         await new Promise((res) => setTimeout(res, 4000));
         return poll();
       };
@@ -116,7 +162,6 @@ export default function UploadZone({
     [onUploadComplete, tier, isLoggedIn]
   );
 
-  /** Classic path — small files through Railway */
   const uploadClassic = useCallback(
     async (file: File) => {
       setStatus('Uploading…');
@@ -137,12 +182,10 @@ export default function UploadZone({
         headers: authHeaders(),
         body: form,
         signal: ac.signal,
-        retries: 4,
-        baseDelayMs: 1500,
-        maxDelayMs: 10000,
-        onRetry: ({ attempt, retriesLeft }) => {
-          setStatus(`Retry ${attempt} (${retriesLeft} left)…`);
-        },
+        retries: 1,
+        baseDelayMs: 2000,
+        maxDelayMs: 4000,
+        onRetry: () => setStatus('Upload interrupted — retrying once…'),
       });
 
       const data = await res.json().catch(() => ({} as any));
@@ -150,14 +193,13 @@ export default function UploadZone({
         throw new Error(data.message || `Upload failed (${res.status})`);
       }
 
-      setStatus('Queued…');
+      setStatus('queued');
       setProgress(20);
       await pollUntilDone(data.jobId, file);
     },
     [authHeaders, deviceProfile, selectedModel, pollUntilDone]
   );
 
-  /** Large path — direct to R2, then cloud compress */
   const uploadLargeViaR2 = useCallback(
     async (file: File) => {
       setStatus('Large file — preparing direct upload…');
@@ -168,7 +210,6 @@ export default function UploadZone({
         'Content-Type': 'application/json',
       };
 
-      // 1) Presign
       const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
         method: 'POST',
         headers,
@@ -186,7 +227,6 @@ export default function UploadZone({
       }
       const { uploadUrl, key } = presignData;
 
-      // 2) PUT to R2 with progress
       setStatus('Uploading directly to storage…');
       setProgress(5);
 
@@ -199,7 +239,6 @@ export default function UploadZone({
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             const pct = Math.round((e.loaded / e.total) * 100);
-            // Map upload 0–100% → progress 5–55
             setProgress(5 + Math.round((e.loaded / e.total) * 50));
             setStatus(`Uploading… ${pct}%`);
           }
@@ -218,7 +257,6 @@ export default function UploadZone({
         xhr.send(file);
       });
 
-      // 3) Start job — cloud will compress (skipCompress: false)
       setStatus('Starting cloud processing…');
       setProgress(58);
 
@@ -241,7 +279,7 @@ export default function UploadZone({
         );
       }
 
-      setStatus('Queued…');
+      setStatus('queued');
       setProgress(65);
       await pollUntilDone(completeData.jobId, file);
     },
@@ -253,6 +291,7 @@ export default function UploadZone({
       setError(null);
       setUploading(true);
       setProgress(1);
+      cancelledRef.current = false;
 
       try {
         if (file.size >= LARGE_UPLOAD_BYTES) {
@@ -261,13 +300,19 @@ export default function UploadZone({
           await uploadClassic(file);
         }
       } catch (err: any) {
-        if (err?.name === 'AbortError') setError('Cancelled');
-        else {
+        if (
+          err?.name === 'AbortError' ||
+          err?.message === 'Cancelled' ||
+          err?.message === 'Upload cancelled'
+        ) {
+          setError(null);
+        } else {
           console.error(err);
           setError(err?.message || 'Processing failed');
         }
       } finally {
         setUploading(false);
+        setActiveJobId(null);
         abortRef.current = null;
       }
     },
@@ -280,6 +325,13 @@ export default function UploadZone({
     const f = e.dataTransfer.files?.[0];
     if (f) upload(f);
   };
+
+  const showCancel =
+    uploading &&
+    (status === 'queued' ||
+      status === 'pending' ||
+      status === 'Queued…' ||
+      status.toLowerCase().includes('queue'));
 
   return (
     <div className="space-y-4">
@@ -316,7 +368,7 @@ export default function UploadZone({
         </label>
 
         {uploading && (
-          <div className="mt-6 space-y-2">
+          <div className="mt-6 space-y-3">
             <div className="h-2 rounded-full bg-white/10 overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-[#f97316] to-[#c084fc] transition-all"
@@ -324,6 +376,15 @@ export default function UploadZone({
               />
             </div>
             {status && <p className="text-xs text-white/50">{status}</p>}
+            {showCancel && (
+              <button
+                type="button"
+                onClick={cancelJob}
+                className="px-4 py-2 rounded-xl text-sm border border-red-500/40 text-red-300 hover:bg-red-900/30 transition"
+              >
+                Cancel (remove from queue)
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -335,7 +396,8 @@ export default function UploadZone({
       )}
 
       <p className="text-[11px] text-white/30 text-center">
-        Restorative Encoder Applying Generative AI for Near-Lossless Sequences (REAGANXS)
+        Restorative Encoder Applying Generative AI for Near-Lossless Sequences
+        (REAGANXS)
       </p>
     </div>
   );

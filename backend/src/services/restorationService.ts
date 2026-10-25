@@ -7,7 +7,7 @@ import {
   MODEL_DISPLAY,
 } from '../config/constants';
 
-const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000;
+const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
 const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -54,6 +54,11 @@ function fileSize(p: string): number {
   }
 }
 
+/**
+ * Full-timeline restore encode.
+ * Speed rule: if AV1 times out or fails, do NOT run another full VP9 pass —
+ * throw so the worker switches to partial frames (same quality samples, ~10 min saved).
+ */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -85,44 +90,23 @@ async function encodeAv1OrVp9(
       ],
       FULL_RESTORE_TIMEOUT_MS
     );
+
     if (fileSize(av1) > 0) {
       fs.renameSync(av1, outPath);
       return 'libsvtav1';
     }
+
+    // Empty output without throw — treat as failure for full path
+    throw new Error('Full restore AV1 produced empty output');
   } catch (e: any) {
-    console.warn('[restore] AV1 → VP9', e?.message?.slice?.(0, 200));
+    const msg = e?.message || String(e);
+    console.warn(
+      '[restore] full AV1 failed/timed out — skip full VP9 → partial',
+      msg.slice?.(0, 200) || msg
+    );
+    // Do not start a second full-timeline VP9 enhance (saves ~10 min on large jobs)
+    throw e instanceof Error ? e : new Error(msg);
   }
-
-  const vp9 = outPath.replace(/(\.\w+)?$/, '_vp9.webm');
-  await run(
-    [
-      '-i', inputPath,
-      ...videoFilter,
-      '-map', '0:v:0',
-      '-map', '0:a:0?',
-      '-c:v', 'libvpx-vp9',
-      '-crf', '28',
-      '-b:v', '0',
-      '-cpu-used', '5',
-      '-deadline', 'good',
-      '-row-mt', '1',
-      '-threads', '2',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'libopus',
-      '-b:a', '96k',
-      '-ac', '2',
-      '-ar', '48000',
-      '-sn',
-      vp9,
-    ],
-    FULL_RESTORE_TIMEOUT_MS
-  );
-
-  if (fileSize(vp9) === 0) {
-    throw new Error('Restore encode empty');
-  }
-  fs.renameSync(vp9, outPath);
-  return 'libvpx-vp9';
 }
 
 async function enhanceFramePng(
@@ -346,6 +330,7 @@ export const restorationService = {
 
     const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
 
+    // Preview clip is tiny — VP9-only is fine for speed
     try {
       await run(
         [

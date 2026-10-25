@@ -121,6 +121,13 @@ export const videoWorker = new Worker<VideoJobData>(
       r2Key,
     } = job.data;
 
+    // Skip if user cancelled while waiting
+    const existing = await ProcessingJob.findById(jobId).lean();
+    if (!existing || existing.status === 'cancelled') {
+      console.log('[worker] skip cancelled job', jobId);
+      return;
+    }
+
     const tier = (tierRaw as UserTier) || 'demo';
     const offering = PROGRESSIVE_OFFERINGS[tier] || PROGRESSIVE_OFFERINGS.demo;
     const partialOpts = PARTIAL_BY_TIER[tier] || PARTIAL_BY_TIER.demo;
@@ -168,6 +175,14 @@ export const videoWorker = new Worker<VideoJobData>(
         });
       }
 
+      // Re-check cancel after long compress
+      const mid = await ProcessingJob.findById(jobId).lean();
+      if (mid?.status === 'cancelled') {
+        console.log('[worker] cancelled after compress', jobId);
+        for (const t of temps) safeUnlink(t);
+        return;
+      }
+
       const user = userId
         ? { id: userId, tier, preferredModel }
         : preferredModel
@@ -184,7 +199,6 @@ export const videoWorker = new Worker<VideoJobData>(
       let restoreSkippedReason: string | null = decision.reason || null;
       const model = decision.model;
 
-      // Full if fast + size ≤ original; else partial (no fail on restore timeout)
       if (model) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'restoring',
@@ -303,6 +317,13 @@ export const videoWorker = new Worker<VideoJobData>(
         }
       }
 
+      // Don't overwrite if user cancelled mid-flight
+      const latest = await ProcessingJob.findById(jobId).lean();
+      if (latest?.status === 'cancelled') {
+        for (const t of temps) safeUnlink(t);
+        return;
+      }
+
       await ProcessingJob.findByIdAndUpdate(jobId, {
         compressedSize: finalSize,
         finalUrl,
@@ -331,10 +352,13 @@ export const videoWorker = new Worker<VideoJobData>(
       }
     } catch (error: any) {
       console.error('[worker]', error);
-      await ProcessingJob.findByIdAndUpdate(jobId, {
-        status: 'failed',
-        error: error?.message || 'Processing failed',
-      });
+      const latest = await ProcessingJob.findById(jobId).lean();
+      if (latest?.status !== 'cancelled') {
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'failed',
+          error: error?.message || 'Processing failed',
+        });
+      }
       for (const t of temps) safeUnlink(t);
       if (r2Key) {
         try {

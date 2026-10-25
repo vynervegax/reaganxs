@@ -61,6 +61,7 @@ const ProcessingJobSchema = new mongoose.Schema(
         'uploading',
         'completed',
         'failed',
+        'cancelled',
       ],
       default: 'queued',
     },
@@ -100,6 +101,12 @@ const ProcessingJobSchema = new mongoose.Schema(
 
     tier: {
       type: String,
+    },
+
+    /** BullMQ job id — used to remove waiting jobs on cancel */
+    bullJobId: {
+      type: String,
+      default: null,
     },
 
     createdAt: {

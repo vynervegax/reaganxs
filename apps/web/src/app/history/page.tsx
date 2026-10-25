@@ -29,11 +29,20 @@ interface HistoryItem {
   previewClipUrl?: string | null;
 }
 
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  'http://localhost:4000'
+)
+  .trim()
+  .replace(/\/$/, '');
+
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadHistory();
@@ -55,6 +64,31 @@ export default function HistoryPage() {
       setHistory([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deleteJob = async (id: string) => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    if (!confirm('Remove this job from history? If queued, it will leave the queue.')) {
+      return;
+    }
+    setDeletingId(id);
+    try {
+      const res = await fetch(`${API_BASE}/api/history/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || 'Delete failed');
+      }
+      setHistory((prev) => prev.filter((h) => h._id !== id));
+      if (expandedId === id) setExpandedId(null);
+    } catch (e: any) {
+      alert(e?.message || 'Delete failed');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -151,8 +185,7 @@ export default function HistoryPage() {
               const expired = isExpired(item.expiresAt);
               const isProcessing =
                 item.status &&
-                item.status !== 'completed' &&
-                item.status !== 'failed';
+                !['completed', 'failed', 'cancelled'].includes(item.status);
               const isExpanded = expandedId === item._id;
               const canShowCard =
                 item.status === 'completed' || (!item.status && !!downloadUrl);
@@ -233,6 +266,15 @@ export default function HistoryPage() {
                           )}
                         </>
                       )}
+
+                      <button
+                        type="button"
+                        disabled={deletingId === item._id}
+                        onClick={() => deleteJob(item._id)}
+                        className="px-4 py-2.5 rounded-2xl border border-red-500/30 text-red-300 hover:bg-red-900/20 text-sm transition disabled:opacity-50"
+                      >
+                        {deletingId === item._id ? 'Removing…' : 'Delete'}
+                      </button>
                     </div>
                   </div>
 

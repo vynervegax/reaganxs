@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { ProcessingJob } from '../models/ProcessingJob';
-import { videoQueue } from '../queue/videoQueue';
+import { videoQueue, removeQueuedBullJobs } from '../queue/videoQueue';
 import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
 
@@ -41,7 +41,7 @@ export const processController = {
       tier,
     });
 
-    await videoQueue.add(
+    const bullJob = await videoQueue.add(
       'process',
       {
         jobId: String(job._id),
@@ -55,6 +55,10 @@ export const processController = {
       },
       { removeOnComplete: 100, removeOnFail: 50 }
     );
+
+    await ProcessingJob.findByIdAndUpdate(job._id, {
+      bullJobId: String(bullJob.id),
+    });
 
     return res.json({
       success: true,
@@ -89,6 +93,58 @@ export const processController = {
         previewFrames: job.previewFrameUrls || [],
         previewClipUrl: job.previewClipUrl || null,
       },
+    });
+  },
+
+  async cancelJob(req: Request, res: Response) {
+    const job = await ProcessingJob.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const user = (req as any).user as { id?: string; _id?: string } | undefined;
+    const uid = user?.id || user?._id;
+    if (job.userId && uid && String(job.userId) !== String(uid)) {
+      return res.status(403).json({ success: false, message: 'Not your job' });
+    }
+
+    const status = job.status;
+    if (status === 'completed' || status === 'cancelled') {
+      return res.json({ success: true, status, message: 'Already finished' });
+    }
+
+    let removed = 0;
+    try {
+      if (job.bullJobId) {
+        const bj = await videoQueue.getJob(String(job.bullJobId));
+        if (bj) {
+          const state = await bj.getState();
+          if (state === 'waiting' || state === 'delayed' || state === 'paused') {
+            await bj.remove();
+            removed = 1;
+          }
+        }
+      }
+      if (removed === 0) {
+        removed = await removeQueuedBullJobs(String(job._id));
+      }
+    } catch (e: any) {
+      console.warn('[cancel] queue remove', e?.message);
+    }
+
+    job.status = 'cancelled';
+    job.error = 'Cancelled by user';
+    job.progress = 0;
+    await job.save();
+
+    return res.json({
+      success: true,
+      status: 'cancelled',
+      removedFromQueue: removed,
+      message:
+        status === 'queued' || status === 'pending'
+          ? 'Removed from queue'
+          : 'Marked cancelled (active encode may finish current step)',
     });
   },
 };

@@ -21,3 +21,20 @@ export type VideoJobData = {
   deviceProfile: any;
   r2Key?: string;
 };
+
+/** Remove waiting/delayed Bull jobs that match a Mongo job id */
+export async function removeQueuedBullJobs(mongoJobId: string): Promise<number> {
+  const states = ['waiting', 'delayed', 'paused'] as const;
+  let removed = 0;
+
+  for (const state of states) {
+    const jobs = await videoQueue.getJobs([state], 0, 200);
+    for (const j of jobs) {
+      if (j.data?.jobId === String(mongoJobId)) {
+        await j.remove();
+        removed++;
+      }
+    }
+  }
+  return removed;
+}

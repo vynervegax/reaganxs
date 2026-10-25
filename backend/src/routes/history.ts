@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import { ProcessingJob } from '../models/ProcessingJob';
+import { removeQueuedBullJobs, videoQueue } from '../queue/videoQueue';
 
 const router = Router();
 
@@ -18,7 +19,9 @@ router.get('/', authenticate, async (req: Authed, res: Response) => {
   try {
     const rawId = req.user?._id || req.user?.id;
     if (!rawId) {
-      return res.status(401).json({ success: false, error: 'Authentication required', jobs: [] });
+      return res
+        .status(401)
+        .json({ success: false, error: 'Authentication required', jobs: [] });
     }
 
     const userId = mongoose.Types.ObjectId.isValid(String(rawId))
@@ -41,7 +44,9 @@ router.get('/', authenticate, async (req: Authed, res: Response) => {
     return res.json(jobs);
   } catch (error) {
     console.error('History error:', error);
-    return res.status(500).json({ success: false, error: 'Failed to fetch history' });
+    return res
+      .status(500)
+      .json({ success: false, error: 'Failed to fetch history' });
   }
 });
 
@@ -59,7 +64,47 @@ router.get('/demo', async (_req, res) => {
     return res.json(jobs);
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ success: false, error: 'Failed to fetch demo history' });
+    return res
+      .status(500)
+      .json({ success: false, error: 'Failed to fetch demo history' });
+  }
+});
+
+/** Delete from history; if still queued, also remove from BullMQ */
+router.delete('/:id', authenticate, async (req: Authed, res: Response) => {
+  try {
+    const rawId = req.user?._id || req.user?.id;
+    if (!rawId) {
+      return res.status(401).json({ success: false, message: 'Auth required' });
+    }
+
+    const job = await ProcessingJob.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    if (job.userId && String(job.userId) !== String(rawId)) {
+      return res.status(403).json({ success: false, message: 'Not your job' });
+    }
+
+    if (job.status === 'queued' || job.status === 'pending') {
+      try {
+        if (job.bullJobId) {
+          const bj = await videoQueue.getJob(String(job.bullJobId));
+          if (bj) await bj.remove();
+        }
+        await removeQueuedBullJobs(String(job._id));
+      } catch (e: any) {
+        console.warn('[history delete] queue', e?.message);
+      }
+    }
+
+    await ProcessingJob.findByIdAndDelete(job._id);
+
+    return res.json({ success: true, message: 'Deleted' });
+  } catch (error) {
+    console.error('History delete error:', error);
+    return res.status(500).json({ success: false, message: 'Delete failed' });
   }
 });
 
