@@ -119,7 +119,8 @@ export const processController = {
         const bj = await videoQueue.getJob(String(job.bullJobId));
         if (bj) {
           const state = await bj.getState();
-          if (state === 'waiting' || state === 'delayed' || state === 'paused') {
+          // BullMQ JobState has no 'paused' in this version
+          if (state === 'waiting' || state === 'delayed') {
             await bj.remove();
             removed = 1;
           }

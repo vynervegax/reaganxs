@@ -24,7 +24,7 @@ export type VideoJobData = {
 
 /** Remove waiting/delayed Bull jobs that match a Mongo job id */
 export async function removeQueuedBullJobs(mongoJobId: string): Promise<number> {
-  const states = ['waiting', 'delayed', 'paused'] as const;
+  const states = ['waiting', 'delayed'] as const; // drop 'paused'
   let removed = 0;
 
   for (const state of states) {
