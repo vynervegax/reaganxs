@@ -41,6 +41,7 @@ const API_BASE = (
   .replace(/\s+/g, '');
 
 const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024;
+const ACTIVE_JOB_KEY = 'reaganxs_active_job';
 
 export default function UploadZone({
   onUploadComplete,
@@ -66,13 +67,22 @@ export default function UploadZone({
     return h;
   }, []);
 
-  const resetUi = useCallback(() => {
-    setUploading(false);
-    setProgress(0);
-    setStatus('');
+  const clearActiveJob = useCallback(() => {
+    try {
+      sessionStorage.removeItem(ACTIVE_JOB_KEY);
+    } catch {
+      /* ignore */
+    }
     setActiveJobId(null);
-    abortRef.current = null;
-    cancelledRef.current = false;
+  }, []);
+
+  const rememberJob = useCallback((jobId: string) => {
+    setActiveJobId(jobId);
+    try {
+      sessionStorage.setItem(ACTIVE_JOB_KEY, jobId);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const cancelJob = useCallback(async () => {
@@ -97,18 +107,20 @@ export default function UploadZone({
     } catch {
       /* ignore */
     }
-    resetUi();
+    clearActiveJob();
+    setUploading(false);
+    setProgress(0);
+    setStatus('');
     setError(null);
-  }, [activeJobId, authHeaders, resetUi]);
+    abortRef.current = null;
+  }, [activeJobId, authHeaders, clearActiveJob]);
 
   const pollUntilDone = useCallback(
     async (jobId: string, file: File): Promise<void> => {
-      setActiveJobId(jobId);
+      rememberJob(jobId);
 
       const poll = async (): Promise<void> => {
-        if (cancelledRef.current) {
-          throw new Error('Cancelled');
-        }
+        if (cancelledRef.current) throw new Error('Cancelled');
 
         const r = await fetch(`${API_BASE}/api/process/${jobId}`);
         if (r.status === 429) {
@@ -132,7 +144,7 @@ export default function UploadZone({
         if (j.status === 'completed') {
           setProgress(100);
           setStatus('Done');
-          setActiveJobId(null);
+          clearActiveJob();
           onUploadComplete({
             url: j.finalUrl,
             savingsPercent: j.savingsPercent ?? 0,
@@ -149,9 +161,11 @@ export default function UploadZone({
           return;
         }
         if (j.status === 'failed') {
+          clearActiveJob();
           throw new Error(j.error || 'Processing failed');
         }
         if (j.status === 'cancelled') {
+          clearActiveJob();
           throw new Error('Cancelled');
         }
         await new Promise((res) => setTimeout(res, 4000));
@@ -159,7 +173,7 @@ export default function UploadZone({
       };
       await poll();
     },
-    [onUploadComplete, tier, isLoggedIn]
+    [onUploadComplete, tier, isLoggedIn, rememberJob, clearActiveJob]
   );
 
   const uploadClassic = useCallback(
@@ -195,7 +209,7 @@ export default function UploadZone({
 
       setStatus('queued');
       setProgress(20);
-      await pollUntilDone(data.jobId, file);
+      await pollUntilDone(String(data.jobId), file);
     },
     [authHeaders, deviceProfile, selectedModel, pollUntilDone]
   );
@@ -281,7 +295,7 @@ export default function UploadZone({
 
       setStatus('queued');
       setProgress(65);
-      await pollUntilDone(completeData.jobId, file);
+      await pollUntilDone(String(completeData.jobId), file);
     },
     [authHeaders, deviceProfile, selectedModel, pollUntilDone]
   );
@@ -312,7 +326,6 @@ export default function UploadZone({
         }
       } finally {
         setUploading(false);
-        setActiveJobId(null);
         abortRef.current = null;
       }
     },

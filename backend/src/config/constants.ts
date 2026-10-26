@@ -77,10 +77,10 @@ export const PARTIAL_BY_TIER: Record<
   string,
   { frameCount: number; maxWidth: number }
 > = {
-  demo: { frameCount: 6, maxWidth: 640 },
-  free: { frameCount: 10, maxWidth: 960 },
-  premium: { frameCount: 12, maxWidth: 1280 },
-  desktop: { frameCount: 16, maxWidth: 1280 },
+  demo: { frameCount: 2, maxWidth: 640 },
+  free: { frameCount: 2, maxWidth: 960 },
+  premium: { frameCount: 2, maxWidth: 1280 },
+  desktop: { frameCount: 2, maxWidth: 1280 },
 };
 
 export const MIN_SAVINGS_FOR_RESTORE = 0.15;

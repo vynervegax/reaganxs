@@ -2,8 +2,9 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import UploadZone from '@/components/ui/UploadZone';
 import ProcessPipeline from '@/components/ProcessPipeline';
 import SavingsCard from '@/components/ui/SavingsCard';
@@ -23,10 +24,24 @@ type JobResult = {
   shouldRestore?: boolean;
   restoreSkippedReason?: string | null;
   stages?: string[];
+  originalSize?: number;
+  finalSize?: number;
+  codec?: string;
   [key: string]: unknown;
 };
 
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  'http://localhost:4000'
+)
+  .trim()
+  .replace(/\/$/, '');
+
+const ACTIVE_JOB_KEY = 'reaganxs_active_job';
+
 export default function ProcessPage() {
+  const searchParams = useSearchParams();
   const [job, setJob] = useState<JobResult | null>(null);
   const [deviceProfile, setDeviceProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -34,6 +49,9 @@ export default function ProcessPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [tier, setTier] = useState('demo');
   const [userLabel, setUserLabel] = useState('');
+  const [watchingJobId, setWatchingJobId] = useState<string | null>(null);
+  const [liveStatus, setLiveStatus] = useState('');
+  const [liveProgress, setLiveProgress] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -79,9 +97,86 @@ export default function ProcessPage() {
     initDevice();
   }, []);
 
-  const handleUploadComplete = (newJob: JobResult) => {
+  const handleUploadComplete = useCallback((newJob: JobResult) => {
     setJob(newJob);
-  };
+    setWatchingJobId(null);
+    setLiveStatus('');
+    setLiveProgress(0);
+    try {
+      sessionStorage.removeItem(ACTIVE_JOB_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const pollJob = useCallback(
+    async (jobId: string) => {
+      try {
+        const r = await fetch(`${API_BASE}/api/process/${jobId}`);
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.job) {
+          setTimeout(() => pollJob(jobId), 5000);
+          return;
+        }
+
+        const j = d.job;
+        setLiveStatus(j.status || '');
+        setLiveProgress(j.progress || 0);
+        try {
+          sessionStorage.setItem(ACTIVE_JOB_KEY, jobId);
+        } catch {
+          /* ignore */
+        }
+
+        if (j.status === 'completed' && j.finalUrl) {
+          handleUploadComplete({
+            url: j.finalUrl,
+            savingsPercent: j.savingsPercent ?? 0,
+            modelUsed: j.modelUsed,
+            didRestore: Boolean(j.didRestore ?? j.restored),
+            restored: Boolean(j.restored ?? j.didRestore),
+            originalSize: j.originalSize,
+            finalSize: j.finalSize,
+            codec: j.codec,
+            vmafScore: j.vmafScore,
+          });
+          return;
+        }
+
+        if (j.status === 'failed' || j.status === 'cancelled') {
+          setWatchingJobId(null);
+          setError(j.error || j.status);
+          try {
+            sessionStorage.removeItem(ACTIVE_JOB_KEY);
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+
+        setTimeout(() => pollJob(jobId), 4000);
+      } catch {
+        setTimeout(() => pollJob(jobId), 5000);
+      }
+    },
+    [handleUploadComplete]
+  );
+
+  useEffect(() => {
+    if (job || loading) return;
+    const fromQuery = searchParams.get('jobId');
+    let fromSession: string | null = null;
+    try {
+      fromSession = sessionStorage.getItem(ACTIVE_JOB_KEY);
+    } catch {
+      /* ignore */
+    }
+    const id = fromQuery || fromSession;
+    if (id) {
+      setWatchingJobId(id);
+      pollJob(id);
+    }
+  }, [searchParams, job, loading, pollJob]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -203,6 +298,34 @@ export default function ProcessPage() {
           </div>
         )}
 
+        {watchingJobId && !job && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#c084fc]/30 bg-[#c084fc]/10 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-white">
+                Processing in progress
+              </p>
+              <p className="text-xs text-white/50">
+                {liveStatus || '…'} · {liveProgress}%
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => pollJob(watchingJobId)}
+                className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
+              >
+                Refresh
+              </button>
+              <Link
+                href="/history"
+                className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
+              >
+                History
+              </Link>
+            </div>
+          </div>
+        )}
+
         {!job ? (
           <UploadZone
             onUploadComplete={handleUploadComplete}
@@ -234,7 +357,7 @@ export default function ProcessPage() {
               </button>
               {job.url && (
                 <a
-                  href={job.url}
+                  href={job.url as string}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-6 py-3 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"

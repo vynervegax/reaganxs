@@ -9,12 +9,15 @@ export const videoQueue = new Queue('video-process', { connection });
 
 export type VideoJobData = {
   jobId: string;
-  filePath: string;
+  filePath?: string;
   originalFilename: string;
   originalSize: number;
   compressedSize?: number;
   codec?: string;
   skipCompress?: boolean;
+  /** Resume after successful compress */
+  resumeFrom?: 'compress' | 'restore' | 'finalize';
+  compressedKey?: string;
   userId: string | null;
   tier: string;
   preferredModel?: string;
@@ -22,10 +25,10 @@ export type VideoJobData = {
   r2Key?: string;
 };
 
-/** Remove waiting/delayed Bull jobs that match a Mongo job id */
 export async function removeQueuedBullJobs(mongoJobId: string): Promise<number> {
   const states = ['waiting', 'delayed'] as const;
   let removed = 0;
+
   for (const state of states) {
     const jobs = await videoQueue.getJobs([state], 0, 200);
     for (const j of jobs) {

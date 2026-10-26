@@ -49,4 +49,8 @@ router.post(
 
 router.get('/:id', statusLimiter, processController.getJobStatus);
 
+router.post('/:id/cancel', optionalAuthenticate, processController.cancelJob);
+
+router.post('/:id/retry', optionalAuthenticate, processController.retryJob);
+
 export default router;

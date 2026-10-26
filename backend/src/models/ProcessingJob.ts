@@ -22,6 +22,12 @@ const ProcessingJobSchema = new mongoose.Schema(
       type: Number,
     },
 
+    /** R2 key for compressed master — enables restore-only retry */
+    compressedKey: {
+      type: String,
+      default: null,
+    },
+
     finalUrl: {
       type: String,
     },
@@ -56,6 +62,7 @@ const ProcessingJobSchema = new mongoose.Schema(
         'queued',
         'pending',
         'compressing',
+        'compressed',
         'routing',
         'restoring',
         'uploading',
@@ -103,7 +110,6 @@ const ProcessingJobSchema = new mongoose.Schema(
       type: String,
     },
 
-    /** BullMQ job id — used to remove waiting jobs on cancel */
     bullJobId: {
       type: String,
       default: null,

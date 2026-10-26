@@ -27,6 +27,7 @@ interface HistoryItem {
   vmafScore?: number | null;
   previewFrameUrls?: string[];
   previewClipUrl?: string | null;
+  compressedKey?: string;
 }
 
 const API_BASE = (
@@ -36,6 +37,18 @@ const API_BASE = (
 )
   .trim()
   .replace(/\/$/, '');
+
+const ACTIVE_JOB_KEY = 'reaganxs_active_job';
+
+const IN_PROGRESS = new Set([
+  'queued',
+  'pending',
+  'compressing',
+  'compressed',
+  'routing',
+  'restoring',
+  'uploading',
+]);
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -67,10 +80,50 @@ export default function HistoryPage() {
     }
   };
 
+  const resumeWatch = (jobId: string) => {
+    try {
+      sessionStorage.setItem(ACTIVE_JOB_KEY, jobId);
+    } catch {
+      /* ignore */
+    }
+    window.location.href = `/process?jobId=${encodeURIComponent(jobId)}`;
+  };
+
+  const retryRestore = async (jobId: string, promote = false) => {
+    const token = localStorage.getItem('token');
+    try {
+      const res = await fetch(`${API_BASE}/api/process/${jobId}/retry`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ promote }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.message || 'Retry failed');
+        return;
+      }
+      try {
+        sessionStorage.setItem(ACTIVE_JOB_KEY, jobId);
+      } catch {
+        /* ignore */
+      }
+      window.location.href = `/process?jobId=${encodeURIComponent(jobId)}`;
+    } catch (e: any) {
+      alert(e?.message || 'Retry failed');
+    }
+  };
+
   const deleteJob = async (id: string) => {
     const token = localStorage.getItem('token');
     if (!token) return;
-    if (!confirm('Remove this job from history? If queued, it will leave the queue.')) {
+    if (
+      !confirm(
+        'Remove this job from history? If queued, it will leave the queue.'
+      )
+    ) {
       return;
     }
     setDeletingId(id);
@@ -80,9 +133,7 @@ export default function HistoryPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.message || 'Delete failed');
-      }
+      if (!res.ok) throw new Error(data.message || 'Delete failed');
       setHistory((prev) => prev.filter((h) => h._id !== id));
       if (expandedId === id) setExpandedId(null);
     } catch (e: any) {
@@ -184,11 +235,12 @@ export default function HistoryPage() {
               const downloadUrl = getDownloadUrl(item);
               const expired = isExpired(item.expiresAt);
               const isProcessing =
-                item.status &&
-                !['completed', 'failed', 'cancelled'].includes(item.status);
+                !!item.status && IN_PROGRESS.has(item.status);
               const isExpanded = expandedId === item._id;
               const canShowCard =
                 item.status === 'completed' || (!item.status && !!downloadUrl);
+              const canRetry =
+                item.status === 'failed' && Boolean(item.compressedKey);
 
               return (
                 <div
@@ -233,9 +285,18 @@ export default function HistoryPage() {
                           Expired
                         </span>
                       ) : isProcessing ? (
-                        <span className="text-[#c084fc] text-sm px-4 py-2 bg-[#c084fc]/10 rounded-xl">
-                          {item.status}
-                        </span>
+                        <>
+                          <span className="text-[#c084fc] text-sm px-4 py-2 bg-[#c084fc]/10 rounded-xl">
+                            {item.status}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => resumeWatch(item._id)}
+                            className="px-4 py-2.5 rounded-2xl border border-[#c084fc]/40 text-[#c084fc] hover:bg-[#c084fc]/10 text-sm"
+                          >
+                            Resume
+                          </button>
+                        </>
                       ) : (
                         <>
                           {downloadUrl && (
@@ -259,7 +320,16 @@ export default function HistoryPage() {
                               {isExpanded ? 'Hide card' : 'Savings card'}
                             </button>
                           )}
-                          {!downloadUrl && !canShowCard && (
+                          {canRetry && (
+                            <button
+                              type="button"
+                              onClick={() => retryRestore(item._id, false)}
+                              className="px-4 py-2.5 rounded-2xl border border-amber-500/40 text-amber-200 hover:bg-amber-900/20 text-sm"
+                            >
+                              Retry restore
+                            </button>
+                          )}
+                          {!downloadUrl && !canShowCard && !canRetry && (
                             <span className="text-gray-500 text-sm">
                               No link available
                             </span>

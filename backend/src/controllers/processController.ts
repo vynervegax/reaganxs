@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
+import path from 'path';
 import { ProcessingJob } from '../models/ProcessingJob';
 import { videoQueue, removeQueuedBullJobs } from '../queue/videoQueue';
 import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
+import { UPLOAD_TEMP_DIR } from '../config/constants';
 
 export const processController = {
   async processVideo(req: Request, res: Response) {
@@ -41,6 +43,7 @@ export const processController = {
       tier,
     });
 
+    // priority 5 = normal new upload (lower number = higher priority in BullMQ)
     const bullJob = await videoQueue.add(
       'process',
       {
@@ -53,7 +56,7 @@ export const processController = {
         preferredModel: req.body?.model ? String(req.body.model) : undefined,
         deviceProfile,
       },
-      { removeOnComplete: 100, removeOnFail: 50 }
+      { removeOnComplete: 100, removeOnFail: 50, priority: 5 }
     );
 
     await ProcessingJob.findByIdAndUpdate(job._id, {
@@ -89,6 +92,11 @@ export const processController = {
         codec: job.codec || null,
         originalSize: job.originalSize,
         finalSize: job.compressedSize || null,
+        compressedKey: (job as any).compressedKey || null,
+        canRetryRestore: Boolean(
+          (job.status === 'failed' || job.status === 'cancelled') &&
+            (job as any).compressedKey
+        ),
         error: job.error || null,
         previewFrames: job.previewFrameUrls || [],
         previewClipUrl: job.previewClipUrl || null,
@@ -113,7 +121,7 @@ export const processController = {
       return res.json({ success: true, status, message: 'Already finished' });
     }
 
-       let removed = 0;
+    let removed = 0;
     try {
       if (job.bullJobId) {
         const bj = await videoQueue.getJob(String(job.bullJobId));
@@ -145,6 +153,87 @@ export const processController = {
         status === 'queued' || status === 'pending'
           ? 'Removed from queue'
           : 'Marked cancelled (active encode may finish current step)',
+    });
+  },
+
+  /**
+   * Retry from restore when compress already succeeded (compressedKey set).
+   * priority 8 = after new uploads (5) unless client asks promote.
+   */
+  async retryJob(req: Request, res: Response) {
+    const job = await ProcessingJob.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const user = (req as any).user as { id?: string; _id?: string } | undefined;
+    const uid = user?.id || user?._id;
+    if (job.userId && uid && String(job.userId) !== String(uid)) {
+      return res.status(403).json({ success: false, message: 'Not your job' });
+    }
+
+    if (job.status === 'completed') {
+      return res.status(400).json({ success: false, message: 'Already completed' });
+    }
+
+    if (!job.compressedKey) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'No compressed artifact — full re-upload required (failed before compress finished)',
+      });
+    }
+
+    // Drop any waiting duplicate for this job
+    try {
+      await removeQueuedBullJobs(String(job._id));
+    } catch {
+      /* ignore */
+    }
+
+    const promote = req.body?.promote === true || req.body?.promote === 'true';
+    const priority = promote ? 1 : 8;
+
+    job.status = 'queued';
+    job.progress = 35;
+    job.error = undefined;
+    await job.save();
+
+    const bullJob = await videoQueue.add(
+      'process',
+      {
+        jobId: String(job._id),
+        originalFilename: job.originalFilename,
+        originalSize: job.originalSize,
+        userId: job.userId ? String(job.userId) : null,
+        tier: job.tier || 'demo',
+        preferredModel: req.body?.model,
+        deviceProfile: req.body?.deviceProfile || {
+          vram: 4,
+          batteryLevel: 100,
+          isLowPower: false,
+        },
+        resumeFrom: 'restore',
+        compressedKey: job.compressedKey,
+        compressedSize: job.compressedSize,
+        codec: job.codec,
+        skipCompress: true,
+      },
+      { removeOnComplete: 100, removeOnFail: 50, priority }
+    );
+
+    job.bullJobId = String(bullJob.id);
+    await job.save();
+
+    return res.json({
+      success: true,
+      jobId: job._id,
+      status: 'queued',
+      resumeFrom: 'restore',
+      priority,
+      message: promote
+        ? 'Restore retry queued at front'
+        : 'Restore retry queued (after new uploads unless promoted)',
     });
   },
 };

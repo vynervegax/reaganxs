@@ -9,7 +9,11 @@ import { routingService } from '../services/routingService';
 import { r2Service } from '../services/r2Service';
 import { savingsService } from '../services/savingsService';
 import { qualityMetricsService } from '../services/qualityMetricsService';
-import { COMPRESSION_ONLY, PARTIAL_BY_TIER } from '../config/constants';
+import {
+  COMPRESSION_ONLY,
+  PARTIAL_BY_TIER,
+  UPLOAD_TEMP_DIR,
+} from '../config/constants';
 import { PROGRESSIVE_OFFERINGS, type UserTier } from '../config/tiers';
 import type { VideoJobData } from '../queue/videoQueue';
 
@@ -33,11 +37,11 @@ function safeUnlink(p?: string) {
   }
 }
 
+/** 2 frames only — no quality sample clip */
 async function runPartialRestore(opts: {
   compressedPath: string;
   model: string;
   partialOpts: { frameCount: number; maxWidth: number };
-  expiryHours: number;
   temps: string[];
   originalSize: number;
 }): Promise<{
@@ -46,16 +50,9 @@ async function runPartialRestore(opts: {
   frameCount: number;
   sampleKeys: string[];
 }> {
-  const {
-    compressedPath,
-    model,
-    partialOpts,
-    temps,
-    originalSize,
-  } = opts;
+  const { compressedPath, model, partialOpts, temps } = opts;
 
   const previewFrameUrls: string[] = [];
-  let previewClipUrl: string | null = null;
   const sampleKeys: string[] = [];
 
   const partial = await restorationService.restorePartialFrames(
@@ -78,26 +75,9 @@ async function runPartialRestore(opts: {
     temps.push(fp);
   }
 
-  try {
-    const clipLocal = path.join(partial.workDir, `preview_${Date.now()}.webm`);
-    await restorationService.framesToPreviewClip(
-      partial.framePaths,
-      clipLocal,
-      2
-    );
-    temps.push(clipLocal);
-    if (sizeOf(clipLocal) > 0 && sizeOf(clipLocal) <= originalSize) {
-      const { url, key } = await r2Service.uploadSample(clipLocal);
-      previewClipUrl = url;
-      sampleKeys.push(key);
-    }
-  } catch (clipErr: any) {
-    console.warn('[worker] preview clip', clipErr?.message);
-  }
-
   return {
     previewFrameUrls,
-    previewClipUrl,
+    previewClipUrl: null,
     frameCount: partial.frameCount,
     sampleKeys,
   };
@@ -118,6 +98,8 @@ export const videoWorker = new Worker<VideoJobData>(
       compressedSize: clientCompressedSize,
       codec: clientCodec,
       r2Key,
+      resumeFrom,
+      compressedKey: dataCompressedKey,
     } = job.data;
 
     const existing = await ProcessingJob.findById(jobId).lean();
@@ -135,9 +117,12 @@ export const videoWorker = new Worker<VideoJobData>(
 
     const tier = (tierRaw as UserTier) || 'demo';
     const offering = PROGRESSIVE_OFFERINGS[tier] || PROGRESSIVE_OFFERINGS.demo;
-    const partialOpts = PARTIAL_BY_TIER[tier] || PARTIAL_BY_TIER.demo;
+    const partialOpts = PARTIAL_BY_TIER[tier] || {
+      frameCount: 2,
+      maxWidth: 960,
+    };
 
-    const originalPath = filePath;
+    let originalPath = filePath || '';
     let processedPath = '';
     let compressedPath = '';
     let didRestore = false;
@@ -145,34 +130,65 @@ export const videoWorker = new Worker<VideoJobData>(
     let codec = '';
     let previewFrameUrls: string[] = [];
     let previewClipUrl: string | null = null;
-    const temps: string[] = [originalPath];
+    const temps: string[] = [];
+    if (originalPath) temps.push(originalPath);
 
-    /** R2 keys to wipe if the job fails (source upload + any samples) */
     const r2KeysOnFail: string[] = [];
     if (r2Key) r2KeysOnFail.push(r2Key);
+
     let sampleKeys: string[] = [];
     let finalKey: string | null = null;
+    let persistedCompressedKey: string | null =
+      dataCompressedKey || (existing as any).compressedKey || null;
 
     try {
       let compressedSize = 0;
 
-      if (skipCompress) {
+      const canResumeRestore =
+        (resumeFrom === 'restore' || skipCompress) &&
+        Boolean(persistedCompressedKey);
+
+      if (canResumeRestore && persistedCompressedKey) {
+        console.log('[worker] resume from restore', jobId, persistedCompressedKey);
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'restoring',
+          progress: 40,
+          error: null,
+        });
+
+        fs.mkdirSync(UPLOAD_TEMP_DIR, { recursive: true });
+        compressedPath = path.join(
+          UPLOAD_TEMP_DIR,
+          `${jobId}_resume_compressed${path.extname(persistedCompressedKey) || '.mp4'}`
+        );
+        await r2Service.downloadToLocal(persistedCompressedKey, compressedPath);
+        temps.push(compressedPath);
+        processedPath = compressedPath;
+        codec = clientCodec || existing.codec || 'libsvtav1';
+        compressedSize =
+          clientCompressedSize ||
+          existing.compressedSize ||
+          sizeOf(compressedPath);
+      } else if (skipCompress && filePath) {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'routing',
           progress: 35,
         });
-        compressedPath = originalPath;
+        compressedPath = filePath;
         processedPath = compressedPath;
         codec = clientCodec || 'libvpx-vp9';
         compressedSize = clientCompressedSize ?? sizeOf(compressedPath);
       } else {
+        if (!filePath || !fs.existsSync(filePath)) {
+          throw new Error('Missing input file for compress');
+        }
+
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'compressing',
           progress: 15,
         });
 
-        const compressedResult =
-          await compressionService.compress(originalPath);
+        const compressedResult = await compressionService.compress(filePath);
         compressedPath = compressedResult.outputPath;
         processedPath = compressedPath;
         codec = compressedResult.codec || '';
@@ -180,10 +196,28 @@ export const videoWorker = new Worker<VideoJobData>(
           compressedResult.compressedSize ?? sizeOf(compressedPath);
         temps.push(compressedPath);
 
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'routing',
-          progress: 35,
-        });
+        try {
+          const up = await r2Service.uploadWithKey(compressedPath, {
+            prefix: 'compressed/',
+            expiryHours: 48,
+          });
+          persistedCompressedKey = up.key;
+          await ProcessingJob.findByIdAndUpdate(jobId, {
+            status: 'compressed',
+            progress: 35,
+            compressedSize,
+            codec,
+            compressedKey: up.key,
+          });
+        } catch (e: any) {
+          console.warn('[worker] compressed checkpoint upload', e?.message);
+          await ProcessingJob.findByIdAndUpdate(jobId, {
+            status: 'routing',
+            progress: 35,
+            compressedSize,
+            codec,
+          });
+        }
       }
 
       const mid = await ProcessingJob.findById(jobId).lean();
@@ -249,12 +283,11 @@ export const videoWorker = new Worker<VideoJobData>(
               compressedPath,
               model,
               partialOpts,
-              expiryHours: decision.expiryHours || 24,
               temps,
               originalSize,
             });
             previewFrameUrls = partial.previewFrameUrls;
-            previewClipUrl = partial.previewClipUrl;
+            previewClipUrl = null;
             sampleKeys = partial.sampleKeys;
             r2KeysOnFail.push(...sampleKeys);
             processedPath = compressedPath;
@@ -298,7 +331,6 @@ export const videoWorker = new Worker<VideoJobData>(
       });
       const finalUrl = uploaded.url;
       finalKey = uploaded.key;
-      // if we fail after this point, delete final too
       r2KeysOnFail.push(finalKey);
 
       const savingsPercent = savingsService.calculate
@@ -318,7 +350,9 @@ export const videoWorker = new Worker<VideoJobData>(
       if (
         offering.canUseVMAF &&
         (tier === 'premium' || tier === 'desktop') &&
-        !skipCompress
+        !skipCompress &&
+        originalPath &&
+        fs.existsSync(originalPath)
       ) {
         try {
           const metrics = await qualityMetricsService.runVMAF(
@@ -343,6 +377,7 @@ export const videoWorker = new Worker<VideoJobData>(
 
       await ProcessingJob.findByIdAndUpdate(jobId, {
         compressedSize: finalSize,
+        compressedKey: persistedCompressedKey,
         finalUrl,
         modelUsed,
         route: decision.route,
@@ -355,12 +390,12 @@ export const videoWorker = new Worker<VideoJobData>(
         restoreMode,
         codec,
         previewFrameUrls,
-        previewClipUrl,
+        previewClipUrl: null,
+        error: null,
       });
 
       for (const t of temps) safeUnlink(t);
 
-      // Success: only delete source upload — keep processed/ + samples/
       if (r2Key) {
         try {
           await r2Service.deleteObject(r2Key);
@@ -375,13 +410,18 @@ export const videoWorker = new Worker<VideoJobData>(
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'failed',
           error: error?.message || 'Processing failed',
+          ...(persistedCompressedKey
+            ? { compressedKey: persistedCompressedKey }
+            : {}),
         });
       }
       for (const t of temps) safeUnlink(t);
 
-      // Failed: delete source upload, any samples, and final if partially uploaded
       try {
-        await r2Service.deleteMany(r2KeysOnFail);
+        const keys = r2KeysOnFail.filter(
+          (k) => k && k !== persistedCompressedKey
+        );
+        await r2Service.deleteMany(keys);
       } catch (e: any) {
         console.warn('[worker] r2 cleanup on fail', e?.message);
       }
