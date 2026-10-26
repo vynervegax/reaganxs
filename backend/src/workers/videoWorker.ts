@@ -44,18 +44,19 @@ async function runPartialRestore(opts: {
   previewFrameUrls: string[];
   previewClipUrl: string | null;
   frameCount: number;
+  sampleKeys: string[];
 }> {
   const {
     compressedPath,
     model,
     partialOpts,
-    expiryHours,
     temps,
     originalSize,
   } = opts;
 
   const previewFrameUrls: string[] = [];
   let previewClipUrl: string | null = null;
+  const sampleKeys: string[] = [];
 
   const partial = await restorationService.restorePartialFrames(
     compressedPath,
@@ -68,11 +69,9 @@ async function runPartialRestore(opts: {
 
   for (const fp of partial.framePaths) {
     try {
-      const url = await r2Service.uploadWithExpiry(
-        fp,
-        Math.min(24, expiryHours || 24)
-      );
+      const { url, key } = await r2Service.uploadSample(fp);
       previewFrameUrls.push(url);
+      sampleKeys.push(key);
     } catch (upErr: any) {
       console.warn('[worker] frame upload', upErr?.message);
     }
@@ -88,10 +87,9 @@ async function runPartialRestore(opts: {
     );
     temps.push(clipLocal);
     if (sizeOf(clipLocal) > 0 && sizeOf(clipLocal) <= originalSize) {
-      previewClipUrl = await r2Service.uploadWithExpiry(
-        clipLocal,
-        Math.min(24, expiryHours || 24)
-      );
+      const { url, key } = await r2Service.uploadSample(clipLocal);
+      previewClipUrl = url;
+      sampleKeys.push(key);
     }
   } catch (clipErr: any) {
     console.warn('[worker] preview clip', clipErr?.message);
@@ -101,6 +99,7 @@ async function runPartialRestore(opts: {
     previewFrameUrls,
     previewClipUrl,
     frameCount: partial.frameCount,
+    sampleKeys,
   };
 }
 
@@ -121,10 +120,16 @@ export const videoWorker = new Worker<VideoJobData>(
       r2Key,
     } = job.data;
 
-    // Skip if user cancelled while waiting
     const existing = await ProcessingJob.findById(jobId).lean();
     if (!existing || existing.status === 'cancelled') {
       console.log('[worker] skip cancelled job', jobId);
+      if (r2Key) {
+        try {
+          await r2Service.deleteObject(r2Key);
+        } catch {
+          /* ignore */
+        }
+      }
       return;
     }
 
@@ -141,6 +146,12 @@ export const videoWorker = new Worker<VideoJobData>(
     let previewFrameUrls: string[] = [];
     let previewClipUrl: string | null = null;
     const temps: string[] = [originalPath];
+
+    /** R2 keys to wipe if the job fails (source upload + any samples) */
+    const r2KeysOnFail: string[] = [];
+    if (r2Key) r2KeysOnFail.push(r2Key);
+    let sampleKeys: string[] = [];
+    let finalKey: string | null = null;
 
     try {
       let compressedSize = 0;
@@ -175,11 +186,11 @@ export const videoWorker = new Worker<VideoJobData>(
         });
       }
 
-      // Re-check cancel after long compress
       const mid = await ProcessingJob.findById(jobId).lean();
       if (mid?.status === 'cancelled') {
         console.log('[worker] cancelled after compress', jobId);
         for (const t of temps) safeUnlink(t);
+        await r2Service.deleteMany(r2KeysOnFail);
         return;
       }
 
@@ -244,6 +255,8 @@ export const videoWorker = new Worker<VideoJobData>(
             });
             previewFrameUrls = partial.previewFrameUrls;
             previewClipUrl = partial.previewClipUrl;
+            sampleKeys = partial.sampleKeys;
+            r2KeysOnFail.push(...sampleKeys);
             processedPath = compressedPath;
             modelUsed = `${model}-partial`;
             didRestore = true;
@@ -279,10 +292,14 @@ export const videoWorker = new Worker<VideoJobData>(
         progress: 80,
       });
 
-      const finalUrl = await r2Service.uploadWithExpiry(
-        processedPath,
-        decision.expiryHours
-      );
+      const uploaded = await r2Service.uploadWithKey(processedPath, {
+        prefix: 'processed/',
+        expiryHours: decision.expiryHours || 24,
+      });
+      const finalUrl = uploaded.url;
+      finalKey = uploaded.key;
+      // if we fail after this point, delete final too
+      r2KeysOnFail.push(finalKey);
 
       const savingsPercent = savingsService.calculate
         ? savingsService.calculate(originalSize, finalSize)
@@ -317,10 +334,10 @@ export const videoWorker = new Worker<VideoJobData>(
         }
       }
 
-      // Don't overwrite if user cancelled mid-flight
       const latest = await ProcessingJob.findById(jobId).lean();
       if (latest?.status === 'cancelled') {
         for (const t of temps) safeUnlink(t);
+        await r2Service.deleteMany(r2KeysOnFail);
         return;
       }
 
@@ -343,11 +360,12 @@ export const videoWorker = new Worker<VideoJobData>(
 
       for (const t of temps) safeUnlink(t);
 
+      // Success: only delete source upload — keep processed/ + samples/
       if (r2Key) {
         try {
-          await r2Service.deleteObject?.(r2Key);
+          await r2Service.deleteObject(r2Key);
         } catch (e: any) {
-          console.warn('[worker] r2 delete', e?.message);
+          console.warn('[worker] r2 delete source', e?.message);
         }
       }
     } catch (error: any) {
@@ -360,13 +378,14 @@ export const videoWorker = new Worker<VideoJobData>(
         });
       }
       for (const t of temps) safeUnlink(t);
-      if (r2Key) {
-        try {
-          await r2Service.deleteObject?.(r2Key);
-        } catch {
-          /* ignore */
-        }
+
+      // Failed: delete source upload, any samples, and final if partially uploaded
+      try {
+        await r2Service.deleteMany(r2KeysOnFail);
+      } catch (e: any) {
+        console.warn('[worker] r2 cleanup on fail', e?.message);
       }
+
       throw error;
     }
   },
