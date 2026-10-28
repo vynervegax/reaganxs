@@ -55,15 +55,15 @@ export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
     communityModels: true,
   },
   desktop: {
-    models: ['rgt-s', 'atd-srx4'],
-    maxFileSizeMB: 100000,
-    dailyUploads: Infinity,
-    expiryHours: 0,
-    canUseVMAF: true,
-    label: 'Desktop',
-    desktopAccess: true,
-    communityModels: true,
-  },
+  models: ['4x-bhi', 'rgt-s', 'atd-srx4'],
+  maxFileSizeMB: 100000,
+  dailyUploads: Infinity,
+  expiryHours: 0,
+  canUseVMAF: true,
+  label: 'Desktop',
+  desktopAccess: true,
+  communityModels: true,
+},
 };
 
 export function getModelsForTier(tier: UserTier): string[] {

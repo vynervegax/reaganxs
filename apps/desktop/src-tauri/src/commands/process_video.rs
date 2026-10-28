@@ -254,7 +254,7 @@ pub async fn process_video(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
     let stem = stem_of(&input);
-    let requested_model = model.unwrap_or_else(|| "4x-purephoto-realplksr".to_string());
+    let requested_model = model.unwrap_or_else(|| "atd-srx4".to_string());
 
     // --- 1. Compress aggressively first ---
     let (compressed_path, codec) = compress_video(&input, &work_dir)?;

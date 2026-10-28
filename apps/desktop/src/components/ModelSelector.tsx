@@ -5,10 +5,10 @@ import { tauriApi } from '../lib/tauriApi';
 
 const MODELS = [
   {
-    id: '4x-purephoto',
-    displayName: '4x PurePhoto RealPLSKR',
-    powerLevel: 'Balanced',
-    file: '4xPurePhoto-RealPLSKR.pth',
+    id: '4x-bhi',
+    displayName: '4x BHI RealPLKSR',
+    powerLevel: 'Light',
+    file: '4xBHI_realplksr_dysample_real.safetensors',
   },
   {
     id: 'rgt-s',

@@ -75,7 +75,7 @@ export default function RegisterPage() {
           </h1>
           <p className="text-white/50 text-sm">
             Free tier unlocks{' '}
-            <span className="text-[#c084fc]">4x Pure Photo PLKSR </span>
+            <span className="text-[#c084fc]">BHI </span>
           </p>
         </div>
 

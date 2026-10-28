@@ -1,11 +1,11 @@
 export type UserTier = 'demo' | 'free' | 'premium' | 'desktop';
 
 export type ModelId =
-  | 'bhi'
-  | 'purephoto'
-  | 'purescale'
-  | 'atd'
-  | 'rgt';
+  | 'rgt-webphoto'
+  | 'atd-webphoto'
+  | 'rgt-s'
+  | 'atd-srx4'
+  | '4x-bhi';
 
 export type DeviceProfile = {
   vram?: number;

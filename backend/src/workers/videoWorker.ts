@@ -6,7 +6,7 @@ import { ProcessingJob } from '../models/ProcessingJob';
 import { compressionService } from '../services/compressionService';
 import { restorationService } from '../services/restorationService';
 import { routingService } from '../services/routingService';
-import { r2Service } from '../services/r2Service';
+import { r2Service, SHORT_LIVED_HOURS } from '../services/r2Service';
 import { savingsService } from '../services/savingsService';
 import { qualityMetricsService } from '../services/qualityMetricsService';
 import {
@@ -35,6 +35,13 @@ function safeUnlink(p?: string) {
   } catch {
     /* ignore */
   }
+}
+
+function expiryHoursForTier(tier: UserTier): number {
+  const h = PROGRESSIVE_OFFERINGS[tier]?.expiryHours;
+  if (h === 0) return 0; // desktop: no auto-expire
+  if (typeof h === 'number' && h > 0) return h;
+  return 24;
 }
 
 /** 2 frames only — no quality sample clip */
@@ -117,6 +124,7 @@ export const videoWorker = new Worker<VideoJobData>(
 
     const tier = (tierRaw as UserTier) || 'demo';
     const offering = PROGRESSIVE_OFFERINGS[tier] || PROGRESSIVE_OFFERINGS.demo;
+    const tierExpiryHours = expiryHoursForTier(tier);
     const partialOpts = PARTIAL_BY_TIER[tier] || {
       frameCount: 2,
       maxWidth: 960,
@@ -149,7 +157,11 @@ export const videoWorker = new Worker<VideoJobData>(
         Boolean(persistedCompressedKey);
 
       if (canResumeRestore && persistedCompressedKey) {
-        console.log('[worker] resume from restore', jobId, persistedCompressedKey);
+        console.log(
+          '[worker] resume from restore',
+          jobId,
+          persistedCompressedKey
+        );
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'restoring',
           progress: 40,
@@ -197,9 +209,10 @@ export const videoWorker = new Worker<VideoJobData>(
         temps.push(compressedPath);
 
         try {
+          // Checkpoint for retry — 9h retention
           const up = await r2Service.uploadWithKey(compressedPath, {
             prefix: 'compressed/',
-            expiryHours: 48,
+            expiryHours: SHORT_LIVED_HOURS,
           });
           persistedCompressedKey = up.key;
           await ProcessingJob.findByIdAndUpdate(jobId, {
@@ -239,6 +252,14 @@ export const videoWorker = new Worker<VideoJobData>(
         deviceProfile,
         user
       );
+
+      // Prefer tier table; routing may still suggest a value
+      const finalExpiryHours =
+        tierExpiryHours > 0
+          ? tierExpiryHours
+          : decision.expiryHours > 0
+            ? decision.expiryHours
+            : 24;
 
       let modelUsed: string = COMPRESSION_ONLY;
       let restoreSkippedReason: string | null = decision.reason || null;
@@ -327,7 +348,7 @@ export const videoWorker = new Worker<VideoJobData>(
 
       const uploaded = await r2Service.uploadWithKey(processedPath, {
         prefix: 'processed/',
-        expiryHours: decision.expiryHours || 24,
+        expiryHours: finalExpiryHours > 0 ? finalExpiryHours : 168,
       });
       const finalUrl = uploaded.url;
       finalKey = uploaded.key;
@@ -343,7 +364,7 @@ export const videoWorker = new Worker<VideoJobData>(
           : 0;
 
       console.log(
-        `[worker] done job=${jobId} in=${(originalSize / 1024 / 1024).toFixed(1)}MB out=${(finalSize / 1024 / 1024).toFixed(1)}MB saved=${savingsPercent}% mode=${restoreMode}`
+        `[worker] done job=${jobId} tier=${tier} expiryH=${finalExpiryHours} in=${(originalSize / 1024 / 1024).toFixed(1)}MB out=${(finalSize / 1024 / 1024).toFixed(1)}MB saved=${savingsPercent}% mode=${restoreMode}`
       );
 
       let vmafScore: number | null = null;
@@ -375,6 +396,12 @@ export const videoWorker = new Worker<VideoJobData>(
         return;
       }
 
+      // Tier-aligned object lifetime (desktop: null = keep until manual/90d row cleanup)
+      const expiresAt =
+        finalExpiryHours > 0
+          ? new Date(Date.now() + finalExpiryHours * 60 * 60 * 1000)
+          : null;
+
       await ProcessingJob.findByIdAndUpdate(jobId, {
         compressedSize: finalSize,
         compressedKey: persistedCompressedKey,
@@ -386,6 +413,7 @@ export const videoWorker = new Worker<VideoJobData>(
         status: 'completed',
         progress: 100,
         completedAt: new Date(),
+        expiresAt,
         restored: didRestore,
         restoreMode,
         codec,

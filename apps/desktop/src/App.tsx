@@ -13,7 +13,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState('idle');
-  const [selectedModel, setSelectedModel] = useState('4x-purephoto-realplksr');
+  const [selectedModel, setSelectedModel] = useState('atd-srx4');
   const [modelStatus, setModelStatus] = useState<{
     loaded: boolean;
     name?: string | null;

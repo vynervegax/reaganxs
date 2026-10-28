@@ -213,7 +213,7 @@ export default function ProcessPage() {
             <p className="text-xs text-white/40 mt-1">
               {isLoggedIn
                 ? `Studio · ${tier}${userLabel ? ` · ${userLabel}` : ''}`
-                : 'Demo studio · Pure Photo PLKSR'}
+                : 'Demo studio · BHI'}
             </p>
           </div>
 

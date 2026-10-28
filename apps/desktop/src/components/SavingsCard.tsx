@@ -2,10 +2,10 @@ import { useRef, useState } from 'react';
 
 const LABELS: Record<string, string> = {
   '4x-bhi': '4x BHI RealPLKSR',
-  '4x-purephoto': '4x PurePhoto RealPLSKR',
-  '4x-purephoto-realplksr': '4x PurePhoto RealPLSKR',
   'rgt-s': 'RGT-S x4',
   'atd-srx4': 'ATD SRx4 Finetune',
+  'rgt-webphoto': 'Real Web Photo RGT',
+  'atd-webphoto': 'Real Web Photo ATD',
   'compression-only': 'Compression only',
 };
 

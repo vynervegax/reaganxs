@@ -242,7 +242,7 @@ export const restorationService = {
       throw new Error(`Partial restore input missing: ${compressedPath}`);
     }
 
-    const frameCount = opts.frameCount ?? 8;
+    const frameCount = opts.frameCount ?? 2;
     const maxWidth = opts.maxWidth ?? 720;
     const dir = path.dirname(compressedPath);
     const stem = path.basename(compressedPath, path.extname(compressedPath));

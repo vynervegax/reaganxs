@@ -40,9 +40,10 @@ impl Default for ModelManager {
 fn weight_file_for(model_name: &str) -> &'static str {
     match model_name {
         "4x-bhi" => "4xBHI_realplksr_dysample_real.safetensors",
-        "4x-purephoto" => "4xPurePhoto-RealPLSKR.pth",
         "rgt-s" => "RGT_S_x4.pth",
         "atd-srx4" => "003_ATD_SRx4_finetune.pth",
+        "rgt-webphoto" => "4xRealWebPhoto_v2_rtg_s.pth",
+        "atd-webphoto" => "4xRealWebPhoto_v3_atd.safetensors",
         _ => "003_ATD_SRx4_finetune.pth",
     }
 }

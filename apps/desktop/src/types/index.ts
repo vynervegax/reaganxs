@@ -1,12 +1,12 @@
 // apps/desktop/src/types/index.ts
-// Ladder: BHI → PurePhoto → PureScale → ATD + RGT
+// Ladder: RGT-S x4 → ATD SRx4 Finetune -> Real Web Photo RGT and ATD
 
 export type ModelId =
-  | 'bhi'
-  | 'purephoto'
-  | 'purescale'
-  | 'atd'
-  | 'rgt';
+  | '4x-bhi'
+  | 'rgt-s'
+  | 'atd-srx4'
+  | 'rgt-webphoto'
+  | 'atd-webphoto';
 
 export type ProcessingStage =
   | 'idle'
@@ -72,10 +72,9 @@ export interface AppSettings {
 
 export const DESKTOP_MODELS: { id: ModelId; label: string; minVramGB: number }[] =
   [
-    { id: 'purephoto', label: 'PurePhoto', minVramGB: 6 },
-    { id: 'purescale', label: 'PureScale', minVramGB: 8 },
-    { id: 'atd', label: 'ATD', minVramGB: 10 },
-    { id: 'rgt', label: 'RGT', minVramGB: 12 },
+    { id: '4x-bhi', label: '4x BHI RealPLKSR', minVramGB: 4 },
+    { id: 'rgt-s', label: 'RGT-S x4', minVramGB: 8 },
+    { id: 'atd-srx4', label: 'ATD SRx4 Finetune', minVramGB: 10 },
   ];
 
-export const DEFAULT_DESKTOP_MODEL: ModelId = 'atd';
+export const DEFAULT_DESKTOP_MODEL: ModelId = 'atd-srx4';

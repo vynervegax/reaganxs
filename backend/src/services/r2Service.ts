@@ -25,6 +25,9 @@ const apiPublic = (
   'http://localhost:4000'
 ).replace(/\/$/, '');
 
+/** samples/ + compressed/ checkpoints */
+export const SHORT_LIVED_HOURS = 9;
+
 const LOCAL_DIR = path.join(process.cwd(), 'tmp', 'outputs');
 fs.mkdirSync(LOCAL_DIR, { recursive: true });
 
@@ -61,11 +64,17 @@ export function keyFromUrlOrKey(urlOrKey: string): string | null {
     if (
       p.startsWith('processed/') ||
       p.startsWith('uploads/') ||
-      p.startsWith('samples/')
+      p.startsWith('samples/') ||
+      p.startsWith('compressed/')
     ) {
       return p;
     }
-    for (const prefix of ['processed/', 'samples/', 'uploads/'] as const) {
+    for (const prefix of [
+      'processed/',
+      'samples/',
+      'uploads/',
+      'compressed/',
+    ] as const) {
       const idx = p.indexOf(prefix);
       if (idx >= 0) return p.slice(idx);
     }
@@ -108,12 +117,63 @@ async function uploadR2(
     return { url: `${publicBase}/${key}`, key };
   }
 
+  // Signed URL access window (object still needs app/cron delete)
+  const hours =
+    opts.expiryHours > 0
+      ? Math.min(Math.max(opts.expiryHours, 1), 168)
+      : 168;
   const url = await getSignedUrl(
     client,
     new GetObjectCommand({ Bucket: bucket, Key: key }),
-    { expiresIn: Math.min(Math.max(opts.expiryHours, 1), 168) * 3600 }
+    { expiresIn: hours * 3600 }
   );
   return { url, key };
+}
+
+async function cleanupPrefixOlderThan(
+  prefix: string,
+  maxAgeHours: number
+): Promise<number> {
+  if (!client || maxAgeHours <= 0) return 0;
+
+  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
+  let deleted = 0;
+  let token: string | undefined;
+
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: token,
+        MaxKeys: 200,
+      })
+    );
+
+    for (const obj of res.Contents || []) {
+      const key = obj.Key;
+      if (!key) continue;
+
+      let ts = obj.LastModified?.getTime() ?? 0;
+      if (!ts) {
+        const m = key.match(new RegExp(`^${prefix.replace('/', '\\/')}(\\d+)-`));
+        if (m) ts = Number(m[1]);
+      }
+      if (ts && ts < cutoff) {
+        await r2Service.deleteObject(key);
+        deleted++;
+      }
+    }
+
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token);
+
+  if (deleted > 0) {
+    console.log(
+      `[cleanup] ${prefix} deleted ${deleted} objects (>${maxAgeHours}h)`
+    );
+  }
+  return deleted;
 }
 
 export const r2Service = {
@@ -155,13 +215,13 @@ export const r2Service = {
     return uploadLocal(localPath);
   },
 
-  /** Partial frames + quality sample clip → samples/ (cleanup after 24h) */
+  /** Partial frames → samples/ (9h cleanup) */
   async uploadSample(
     localPath: string
   ): Promise<{ url: string; key: string }> {
     return this.uploadWithKey(localPath, {
       prefix: 'samples/',
-      expiryHours: 24,
+      expiryHours: SHORT_LIVED_HOURS,
     });
   },
 
@@ -224,47 +284,15 @@ export const r2Service = {
     if (key) await this.deleteObject(key);
   },
 
-  /** Delete samples/ older than maxAgeHours (default 24) */
-  async cleanupExpiredSamples(maxAgeHours = 24): Promise<number> {
-    if (!client) return 0;
+  async cleanupExpiredSamples(
+    maxAgeHours = SHORT_LIVED_HOURS
+  ): Promise<number> {
+    return cleanupPrefixOlderThan('samples/', maxAgeHours);
+  },
 
-    const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
-    let deleted = 0;
-    let token: string | undefined;
-
-    do {
-      const res = await client.send(
-        new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: 'samples/',
-          ContinuationToken: token,
-          MaxKeys: 200,
-        })
-      );
-
-      for (const obj of res.Contents || []) {
-        const key = obj.Key;
-        if (!key) continue;
-
-        let ts = obj.LastModified?.getTime() ?? 0;
-        if (!ts) {
-          const m = key.match(/^samples\/(\d+)-/);
-          if (m) ts = Number(m[1]);
-        }
-        if (ts && ts < cutoff) {
-          await this.deleteObject(key);
-          deleted++;
-        }
-      }
-
-      token = res.IsTruncated ? res.NextContinuationToken : undefined;
-    } while (token);
-
-    if (deleted > 0) {
-      console.log(
-        `[cleanup] samples/ deleted ${deleted} objects (>${maxAgeHours}h)`
-      );
-    }
-    return deleted;
+  async cleanupExpiredCompressed(
+    maxAgeHours = SHORT_LIVED_HOURS
+  ): Promise<number> {
+    return cleanupPrefixOlderThan('compressed/', maxAgeHours);
   },
 };
