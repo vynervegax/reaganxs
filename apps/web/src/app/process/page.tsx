@@ -11,6 +11,7 @@ import SavingsCard from '@/components/ui/SavingsCard';
 import DeviceStatus from '@/components/ui/DeviceStatus';
 import RestoreStatus from '@/components/ui/RestoreStatus';
 import { getDeviceProfile } from '@/lib/deviceProfile';
+import ProcessingTicker from '@/components/ui/ProcessingTicker';
 
 type JobResult = {
   success?: boolean;
@@ -299,32 +300,35 @@ export default function ProcessPage() {
         )}
 
         {watchingJobId && !job && (
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#c084fc]/30 bg-[#c084fc]/10 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">
-                Processing in progress
-              </p>
-              <p className="text-xs text-white/50">
-                {liveStatus || '…'} · {liveProgress}%
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => pollJob(watchingJobId)}
-                className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
-              >
-                Refresh
-              </button>
-              <Link
-                href="/history"
-                className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
-              >
-                History
-              </Link>
-            </div>
-          </div>
-        )}
+  <div className="mb-6 space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#c084fc]/30 bg-[#c084fc]/10 px-4 py-3">
+      <div>
+        <p className="text-sm font-medium text-white">
+          Processing in progress
+        </p>
+        <p className="text-xs text-white/50">
+          {liveStatus || '…'} · {liveProgress}%
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => pollJob(watchingJobId)}
+          className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
+        >
+          Refresh
+        </button>
+        <Link
+          href="/history"
+          className="px-3 py-1.5 rounded-xl text-xs border border-white/20 hover:bg-white/10"
+        >
+          History
+        </Link>
+      </div>
+    </div>
+    <ProcessingTicker />
+  </div>
+)}
 
         {!job ? (
           <UploadZone

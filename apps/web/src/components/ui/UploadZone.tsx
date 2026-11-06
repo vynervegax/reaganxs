@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { resilientFetch } from '@/lib/resilientFetch';
+import ProcessingTicker from '@/components/ui/ProcessingTicker';
 
 export type ProcessJobResult = {
   url: string;
@@ -381,25 +382,26 @@ export default function UploadZone({
         </label>
 
         {uploading && (
-          <div className="mt-6 space-y-3">
-            <div className="h-2 rounded-full bg-white/10 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-[#f97316] to-[#c084fc] transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            {status && <p className="text-xs text-white/50">{status}</p>}
-            {showCancel && (
-              <button
-                type="button"
-                onClick={cancelJob}
-                className="px-4 py-2 rounded-xl text-sm border border-red-500/40 text-red-300 hover:bg-red-900/30 transition"
-              >
-                Cancel (remove from queue)
-              </button>
-            )}
-          </div>
-        )}
+  <div className="mt-6 space-y-3">
+    <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+      <div
+        className="h-full bg-gradient-to-r from-[#f97316] to-[#c084fc] transition-all"
+        style={{ width: `${progress}%` }}
+      />
+    </div>
+    {status && <p className="text-xs text-white/50">{status}</p>}
+    <ProcessingTicker />
+    {showCancel && (
+      <button
+        type="button"
+        onClick={cancelJob}
+        className="px-4 py-2 rounded-xl text-sm border border-red-500/40 text-red-300 hover:bg-red-900/30 transition"
+      >
+        Cancel (remove from queue)
+      </button>
+    )}
+  </div>
+)}
       </div>
 
       {error && (

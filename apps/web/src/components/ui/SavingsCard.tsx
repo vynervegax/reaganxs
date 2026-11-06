@@ -92,26 +92,31 @@ export default function SavingsCard({
     }
   };
 
-  /** Export card as PNG (JPEG if you prefer type 'image/jpeg') */
   const onDownloadCardImage = async (format: 'png' | 'jpeg' = 'png') => {
     const el = cardRef.current;
     if (!el) return;
     setBusy(true);
     setShareMsg('');
     try {
-      // Dynamic import keeps bundle light
       const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(el, {
         backgroundColor: '#1c140f',
         scale: 2,
         useCORS: true,
+        allowTaint: false,
         logging: false,
+        imageTimeout: 5000,
       });
       const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-      const dataUrl = canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined);
+      const dataUrl = canvas.toDataURL(
+        mime,
+        format === 'jpeg' ? 0.92 : undefined
+      );
       const a = document.createElement('a');
       a.href = dataUrl;
-      a.download = `reaganxs-savings-${Date.now()}.${format === 'jpeg' ? 'jpg' : 'png'}`;
+      a.download = `reaganxs-savings-${Date.now()}.${
+        format === 'jpeg' ? 'jpg' : 'png'
+      }`;
       a.click();
       setShareMsg(`Card saved as ${format.toUpperCase()}`);
     } catch (e: any) {
@@ -128,11 +133,41 @@ export default function SavingsCard({
         ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-5 text-white"
       >
+        {/* Logo + title — captured in PNG/JPG */}
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text text-transparent">
-            ReaganXS Results
-          </h3>
-          <span className="text-xs text-white/40">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Prefer /logo.png in public/; fallback mark always exports */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.png"
+              alt="ReaganXS"
+              width={36}
+              height={36}
+              className="h-9 w-9 rounded-lg object-contain shrink-0"
+              crossOrigin="anonymous"
+              onError={(e) => {
+                const t = e.currentTarget;
+                t.style.display = 'none';
+                const fallback = t.nextElementSibling as HTMLElement | null;
+                if (fallback) fallback.style.display = 'flex';
+              }}
+            />
+            <div
+              className="hidden h-9 w-9 rounded-lg bg-gradient-to-br from-[#f97316] to-[#c084fc] items-center justify-center text-black text-[10px] font-bold shrink-0"
+              aria-hidden
+            >
+              RX
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-lg font-semibold leading-tight">
+                <span className="bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text text-transparent">
+                  ReaganXS
+                </span>
+              </h3>
+              <p className="text-[11px] text-white/40 truncate">Results</p>
+            </div>
+          </div>
+          <span className="text-xs text-white/40 shrink-0">
             {isLoggedIn ? 'Account' : 'Demo'}
           </span>
         </div>
