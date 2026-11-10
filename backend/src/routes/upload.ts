@@ -13,7 +13,7 @@ type Authed = Request & {
 
 const router = Router();
 
-router.post('/presign', async (req: Authed, res: Response) => {
+router.post('/presign', optionalAuthenticate, async (req: Authed, res: Response) => {
   try {
     const { filename, contentType } = req.body || {};
     if (!filename || !contentType) {
@@ -51,7 +51,7 @@ router.post('/presign', async (req: Authed, res: Response) => {
   }
 });
 
-router.post('/complete', async (req: Authed, res: Response) => {
+router.post('/complete', optionalAuthenticate, async (req: Authed, res: Response) => {
   try {
     const {
       key,
