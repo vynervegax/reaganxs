@@ -39,7 +39,7 @@ export async function removeQueuedBullJobs(
   processingJobId: string
 ): Promise<number> {
   let removed = 0;
-  const jobs = await videoQueue.getJobs(['waiting', 'delayed', 'paused']);
+  const jobs = await videoQueue.getJobs(['waiting', 'delayed']);
   for (const j of jobs) {
     const data = j.data as VideoJobData;
     if (data?.jobId === processingJobId) {

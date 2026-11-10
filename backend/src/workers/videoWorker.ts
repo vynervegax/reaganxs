@@ -376,8 +376,8 @@ export const videoWorker = new Worker<VideoJobData>(
       compressedSize: clientCompressedSize,
     } = job.data;
 
-    const existing = await ProcessingJob.findById(jobId).lean();
-    if (!existing || existing.status === 'cancelled') {
+    const existing = await ProcessingJob.findById(jobId).lean() as any;
+if (!existing || existing.status === 'cancelled') {
       if (r2Key) {
         try {
           await r2Service.deleteObject(r2Key);
@@ -450,8 +450,8 @@ export const videoWorker = new Worker<VideoJobData>(
       });
     } catch (error: any) {
       console.error('[worker]', error);
-      const latest = await ProcessingJob.findById(jobId).lean();
-      if (latest?.status !== 'cancelled') {
+      const latest = await ProcessingJob.findById(jobId).lean() as any;
+if (latest?.status !== 'cancelled') {
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'failed',
           error: error?.message || 'Processing failed',
