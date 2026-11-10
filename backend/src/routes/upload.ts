@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { optionalAuthenticate } from '../middleware/auth';
 import { r2Service } from '../services/r2Service';
 import { ProcessingJob } from '../models/ProcessingJob';
 import { videoQueue } from '../queue/videoQueue';
