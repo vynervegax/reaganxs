@@ -5,7 +5,10 @@ import multer from 'multer';
 import fs from 'fs';
 import { optionalAuthenticate } from '../middleware/auth';
 import { tierGuard } from '../middleware/tierGuard';
-import { validateFileMiddleware } from '../middleware/validateFile';
+import {
+  validateFileMiddleware,
+  multerMediaFilter,
+} from '../middleware/validateFile';
 import { processController } from '../controllers/processController';
 import { UPLOAD_TEMP_DIR, MAX_UPLOAD_BYTES } from '../config/constants';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -23,6 +26,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: MAX_UPLOAD_BYTES },
+  fileFilter: multerMediaFilter, // video + image only (enabled kinds)
 });
 
 const statusLimiter = rateLimit({
@@ -42,8 +46,8 @@ router.post(
   '/',
   optionalAuthenticate,
   tierGuard('demo'),
-  upload.single('video'),
-  validateFileMiddleware,
+  upload.single('video'), // field name stays "video"; images OK via filter
+  validateFileMiddleware, // assert MIME + tier size after multer
   processController.processVideo
 );
 

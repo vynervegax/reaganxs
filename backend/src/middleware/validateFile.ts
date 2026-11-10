@@ -1,5 +1,4 @@
-import type { Request } from 'express';
-import multer from 'multer';
+import type { Request, Response, NextFunction } from 'express';
 import {
   isMimeAllowed,
   resolveMediaKind,
@@ -7,7 +6,6 @@ import {
   type MediaKind,
 } from '../config/mediaKinds';
 import { PROGRESSIVE_OFFERINGS, type UserTier } from '../config/tiers';
-import { UPLOAD_TEMP_DIR } from '../config/constants';
 
 export function assertAllowedUpload(opts: {
   mime?: string | null;
@@ -48,6 +46,7 @@ export function assertAllowedUpload(opts: {
   return { mediaKind };
 }
 
+/** Multer fileFilter — use on the existing `upload` instance in process.ts */
 export function multerMediaFilter(
   _req: Request,
   file: Express.Multer.File,
@@ -55,7 +54,9 @@ export function multerMediaFilter(
 ) {
   try {
     if (!isMimeAllowed(file.mimetype, file.originalname)) {
-      return cb(new Error('Only enabled media types are allowed (video, image).'));
+      return cb(
+        new Error('Only enabled media types are allowed (video, image).')
+      );
     }
     cb(null, true);
   } catch (e: any) {
@@ -63,9 +64,41 @@ export function multerMediaFilter(
   }
 }
 
-/** Used by process routes: field name `video` (legacy) */
-export const validateFileMiddleware = multer({
-  dest: UPLOAD_TEMP_DIR,
-  limits: { fileSize: 32 * 1024 * 1024 * 1024 },
-  fileFilter: multerMediaFilter,
-}).single('video');
+/**
+ * Express middleware AFTER upload.single('video').
+ * Checks MIME + tier size and sets req.mediaKind.
+ */
+export function validateFileMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded',
+      });
+    }
+
+    const user = (req as any).user as { tier?: string } | undefined;
+    const tier = user?.tier || 'demo';
+
+    const { mediaKind } = assertAllowedUpload({
+      mime: file.mimetype,
+      filename: file.originalname,
+      size: file.size,
+      tier,
+    });
+
+    (req as any).mediaKind = mediaKind;
+    next();
+  } catch (e: any) {
+    const status = e?.status || 400;
+    return res.status(status).json({
+      success: false,
+      message: e?.message || 'Invalid file',
+    });
+  }
+}
