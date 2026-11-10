@@ -1,49 +1,85 @@
 import { Request, Response } from 'express';
-import path from 'path';
 import { ProcessingJob } from '../models/ProcessingJob';
 import { videoQueue, removeQueuedBullJobs } from '../queue/videoQueue';
 import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
-import { UPLOAD_TEMP_DIR } from '../config/constants';
+import { assertAllowedUpload } from '../middleware/validateFile';
+import { resolveMediaKind } from '../config/mediaKinds';
+
+type AuthedUser = {
+  id?: string;
+  _id?: string;
+  tier?: UserTier;
+  preferredModel?: string;
+};
+
+function parseDeviceProfile(body: any): Record<string, unknown> {
+  let deviceProfile: any = { vram: 4, batteryLevel: 100, isLowPower: false };
+  try {
+    if (typeof body?.deviceProfile === 'string') {
+      deviceProfile = JSON.parse(body.deviceProfile);
+    } else if (body?.deviceProfile && typeof body.deviceProfile === 'object') {
+      deviceProfile = body.deviceProfile;
+    }
+  } catch {
+    /* defaults */
+  }
+  if (body?.model) {
+    deviceProfile.preferredModel = String(body.model);
+  }
+  return deviceProfile;
+}
 
 export const processController = {
+  /**
+   * Multipart upload — video or image (enabled MEDIA_KINDS).
+   * Field name remains `video` for multer compatibility; mediaKind is derived.
+   */
   async processVideo(req: Request, res: Response) {
     const file = req.file;
     if (!file) {
-      return res.status(400).json({ success: false, message: 'No video uploaded' });
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded',
+      });
     }
 
-    const user = (req as any).user as
-      | { id?: string; _id?: string; tier?: UserTier; preferredModel?: string }
-      | undefined;
-
-    let deviceProfile: any = { vram: 4, batteryLevel: 100, isLowPower: false };
-    try {
-      if (typeof req.body?.deviceProfile === 'string') {
-        deviceProfile = JSON.parse(req.body.deviceProfile);
-      } else if (req.body?.deviceProfile && typeof req.body.deviceProfile === 'object') {
-        deviceProfile = req.body.deviceProfile;
-      }
-    } catch {
-      /* defaults */
-    }
-    if (req.body?.model) {
-      deviceProfile.preferredModel = String(req.body.model);
-    }
-
+    const user = (req as any).user as AuthedUser | undefined;
     const tier = ((user?.tier as UserTier) || 'demo') as UserTier;
     const userId = user?.id || user?._id || null;
+    const deviceProfile = parseDeviceProfile(req.body);
+
+    let mediaKind: string;
+    try {
+      const allowed = assertAllowedUpload({
+        mime: file.mimetype,
+        filename: file.originalname,
+        size: file.size,
+        tier,
+      });
+      mediaKind =
+        (typeof req.body?.mediaKind === 'string' && req.body.mediaKind) ||
+        allowed.mediaKind ||
+        resolveMediaKind(file.mimetype, file.originalname);
+    } catch (e: any) {
+      const status = e?.status || 400;
+      return res.status(status).json({
+        success: false,
+        message: e?.message || 'Unsupported media type',
+      });
+    }
 
     const job = await ProcessingJob.create({
       userId,
       originalFilename: sanitizeFilename(file.originalname),
       originalSize: file.size,
+      mediaKind,
+      mimeType: file.mimetype,
       status: 'queued',
       progress: 0,
       tier,
     });
 
-    // priority 5 = normal new upload (lower number = higher priority in BullMQ)
     const bullJob = await videoQueue.add(
       'process',
       {
@@ -53,8 +89,12 @@ export const processController = {
         originalSize: file.size,
         userId: userId ? String(userId) : null,
         tier,
-        preferredModel: req.body?.model ? String(req.body.model) : undefined,
+        preferredModel: req.body?.model
+          ? String(req.body.model)
+          : undefined,
         deviceProfile,
+        mediaKind,
+        mimeType: file.mimetype,
       },
       { removeOnComplete: 100, removeOnFail: 50, priority: 5 }
     );
@@ -67,6 +107,7 @@ export const processController = {
       success: true,
       jobId: job._id,
       status: 'queued',
+      mediaKind,
     });
   },
 
@@ -93,6 +134,8 @@ export const processController = {
         originalSize: job.originalSize,
         finalSize: job.compressedSize || null,
         compressedKey: (job as any).compressedKey || null,
+        mediaKind: (job as any).mediaKind || 'video',
+        mimeType: (job as any).mimeType || null,
         canRetryRestore: Boolean(
           (job.status === 'failed' || job.status === 'cancelled') &&
             (job as any).compressedKey
@@ -158,7 +201,7 @@ export const processController = {
 
   /**
    * Retry from restore when compress already succeeded (compressedKey set).
-   * priority 8 = after new uploads (5) unless client asks promote.
+   * Works for video (and image if you set compressedKey the same way).
    */
   async retryJob(req: Request, res: Response) {
     const job = await ProcessingJob.findById(req.params.id);
@@ -173,7 +216,9 @@ export const processController = {
     }
 
     if (job.status === 'completed') {
-      return res.status(400).json({ success: false, message: 'Already completed' });
+      return res
+        .status(400)
+        .json({ success: false, message: 'Already completed' });
     }
 
     if (!job.compressedKey) {
@@ -184,7 +229,6 @@ export const processController = {
       });
     }
 
-    // Drop any waiting duplicate for this job
     try {
       await removeQueuedBullJobs(String(job._id));
     } catch {
@@ -193,6 +237,7 @@ export const processController = {
 
     const promote = req.body?.promote === true || req.body?.promote === 'true';
     const priority = promote ? 1 : 8;
+    const mediaKind = (job as any).mediaKind || 'video';
 
     job.status = 'queued';
     job.progress = 35;
@@ -218,6 +263,8 @@ export const processController = {
         compressedSize: job.compressedSize,
         codec: job.codec,
         skipCompress: true,
+        mediaKind,
+        mimeType: (job as any).mimeType,
       },
       { removeOnComplete: 100, removeOnFail: 50, priority }
     );
@@ -230,6 +277,7 @@ export const processController = {
       jobId: job._id,
       status: 'queued',
       resumeFrom: 'restore',
+      mediaKind,
       priority,
       message: promote
         ? 'Restore retry queued at front'

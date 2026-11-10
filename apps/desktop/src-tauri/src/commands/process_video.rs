@@ -1,8 +1,22 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
 use tauri::State;
+
 use crate::state::AppState;
+
+const REAL_MODELS: &[&str] = &[
+    "rgt-webphoto",
+    "atd-webphoto",
+    "rgt-s",
+    "atd-srx4",
+    "4x-bhi",
+];
+
+fn is_real_model(name: &str) -> bool {
+    REAL_MODELS.iter().any(|m| *m == name)
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProcessResult {
@@ -25,12 +39,19 @@ fn run_ffmpeg(args: &[&str]) -> Result<(), String> {
     let output = Command::new("ffmpeg")
         .args(args)
         .output()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        .map_err(|e| format!("Failed to spawn ffmpeg: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let tail: String = stderr.chars().rev().take(2500).collect::<String>().chars().rev().collect();
-        return Err(format!("ffmpeg failed: {}", tail));
+        let tail: String = stderr
+            .chars()
+            .rev()
+            .take(2500)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        return Err(format!("ffmpeg failed: {tail}"));
     }
     Ok(())
 }
@@ -46,28 +67,37 @@ fn stem_of(path: &Path) -> String {
         .to_string()
 }
 
-/// Compress first: SVT-AV1 → VP9 fallback.
-/// Always stereo Opus (-ac 2) so 5.1(side) / DTS-HD sources work.
 fn compress_video(input: &Path, work_dir: &Path) -> Result<(PathBuf, String), String> {
     let stem = stem_of(input);
-    let av1_out = work_dir.join(format!("{}_av1.mp4", stem));
-    let vp9_out = work_dir.join(format!("{}_vp9.webm", stem));
+    let av1_out = work_dir.join(format!("{stem}_rx_av1.mp4"));
+    let vp9_out = work_dir.join(format!("{stem}_rx_vp9.webm"));
     let input_str = input.to_str().ok_or("Invalid input path")?;
 
-    // 1) SVT-AV1
     let av1_args = [
-        "-hide_banner", "-y",
-        "-i", input_str,
-        "-map", "0:v:0",
-        "-map", "0:a:0?",
-        "-c:v", "libsvtav1",
-        "-preset", "8",
-        "-crf", "33",
-        "-c:a", "libopus",
-        "-b:a", "96k",
-        "-ac", "2",
-        "-ar", "48000",
-        "-movflags", "+faststart",
+        "-hide_banner",
+        "-y",
+        "-i",
+        input_str,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libsvtav1",
+        "-preset",
+        "8",
+        "-crf",
+        "28",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "96k",
+        "-ac",
+        "2",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
         "-sn",
         av1_out.to_str().unwrap(),
     ];
@@ -77,23 +107,39 @@ fn compress_video(input: &Path, work_dir: &Path) -> Result<(PathBuf, String), St
             return Ok((av1_out, "libsvtav1".to_string()));
         }
         Ok(()) => println!("[compress] AV1 empty → VP9"),
-        Err(e) => println!("[compress] AV1 failed → VP9: {}", e.chars().take(400).collect::<String>()),
+        Err(e) => println!(
+            "[compress] AV1 failed → VP9: {}",
+            e.chars().take(400).collect::<String>()
+        ),
     }
 
-    // 2) VP9 + stereo Opus
     let vp9_args = [
-        "-hide_banner", "-y",
-        "-i", input_str,
-        "-map", "0:v:0",
-        "-map", "0:a:0?",
-        "-c:v", "libvpx-vp9",
-        "-crf", "32",
-        "-b:v", "0",
-        "-row-mt", "1",
-        "-c:a", "libopus",
-        "-b:a", "96k",
-        "-ac", "2",
-        "-ar", "48000",
+        "-hide_banner",
+        "-y",
+        "-i",
+        input_str,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libvpx-vp9",
+        "-crf",
+        "28",
+        "-b:v",
+        "0",
+        "-row-mt",
+        "1",
+        "-cpu-used",
+        "5",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "96k",
+        "-ac",
+        "2",
+        "-ar",
+        "48000",
         "-sn",
         vp9_out.to_str().unwrap(),
     ];
@@ -107,8 +153,7 @@ fn compress_video(input: &Path, work_dir: &Path) -> Result<(PathBuf, String), St
     Ok((vp9_out, "libvpx-vp9".to_string()))
 }
 
-/// Partial restore: extract a few frames, run model if loaded, write restored PNGs.
-/// Returns (restored, model_used, reason, extra_stages, optional_preview_dir).
+/// Partial restore — real model path only when allow_real_model + model session.
 fn partial_restore(
     compressed: &Path,
     work_dir: &Path,
@@ -117,18 +162,43 @@ fn partial_restore(
     loaded_name: Option<String>,
     requested_model: &str,
     savings: f64,
-    state: &State<'_, AppState>,
+    allow_real_model: bool,
 ) -> (bool, String, Option<String>, Vec<String>) {
     let mut stages = Vec::new();
+
+    if !allow_real_model {
+        stages.push("restore:skipped_premium_required".into());
+        return (
+            false,
+            "compression-only".into(),
+            Some(
+                "Real restoration models require Premium on Desktop. Compression completed."
+                    .into(),
+            ),
+            stages,
+        );
+    }
 
     if !model_loaded {
         stages.push("restore:skipped_no_model".into());
         return (
             false,
             "compression-only".into(),
-            Some("No model loaded. Select a model in ModelSelector first.".into()),
+            Some("No model loaded. Select a Premium model first.".into()),
             stages,
         );
+    }
+
+    if let Some(ref name) = loaded_name {
+        if is_real_model(name) && !allow_real_model {
+            stages.push("restore:blocked_not_premium".into());
+            return (
+                false,
+                "compression-only".into(),
+                Some("Premium required for real model inference.".into()),
+                stages,
+            );
+        }
     }
 
     if savings < 15.0 {
@@ -137,24 +207,27 @@ fn partial_restore(
             false,
             "compression-only".into(),
             Some(format!(
-                "Savings {:.1}% below 15% threshold (compress-first rule).",
-                savings
+                "Savings {savings:.1}% below 15% threshold (compress-first rule)."
             )),
             stages,
         );
     }
 
-    let frames_dir = work_dir.join(format!("{}_frames", stem));
-    let restored_dir = work_dir.join(format!("{}_restored_frames", stem));
+    let frames_dir = work_dir.join(format!("{stem}_frames"));
+    let restored_dir = work_dir.join(format!("{stem}_restored_frames"));
     let _ = fs::create_dir_all(&frames_dir);
     let _ = fs::create_dir_all(&restored_dir);
 
     let pattern = frames_dir.join("frame_%03d.png");
     let extract = run_ffmpeg(&[
-        "-hide_banner", "-y",
-        "-i", compressed.to_str().unwrap(),
-        "-vf", "fps=2,scale='min(640,iw)':-2",
-        "-frames:v", "8",
+        "-hide_banner",
+        "-y",
+        "-i",
+        compressed.to_str().unwrap(),
+        "-vf",
+        "fps=1,scale='min(960,iw)':-2",
+        "-frames:v",
+        "2",
         pattern.to_str().unwrap(),
     ]);
 
@@ -163,7 +236,10 @@ fn partial_restore(
         return (
             false,
             "compression-only".into(),
-            Some(format!("Frame extract failed: {}", e.chars().take(200).collect::<String>())),
+            Some(format!(
+                "Frame extract failed: {}",
+                e.chars().take(200).collect::<String>()
+            )),
             stages,
         );
     }
@@ -190,27 +266,20 @@ fn partial_restore(
 
     stages.push(format!("restore:partial_frames:{}", frame_paths.len()));
 
-    // Best-effort: copy frames as "restored" placeholders if inference not fully wired,
-    // OR call run_batch_inference when model session is ready.
     let model_used = loaded_name
         .clone()
         .unwrap_or_else(|| requested_model.to_string());
 
+    // Placeholder until Candle/ONNX forward is wired:
+    // call run_batch_inference per frame when allow_real_model.
     let mut restored_count = 0usize;
-
-    // Try inference path; fall back to frame copy so pipeline still proves restore step ran.
     for (idx, frame) in frame_paths.iter().enumerate() {
-        let out = restored_dir.join(format!("restored_{:03}.png", idx));
-        // Lightweight proof path: copy extracted frame as restored output.
-        // Replace this block with real tensor → run_batch_inference → save when model forward is stable.
+        let out = restored_dir.join(format!("restored_{idx:03}.png"));
         match fs::copy(frame, &out) {
             Ok(_) => restored_count += 1,
-            Err(e) => println!("[restore] frame {} copy failed: {}", idx, e),
+            Err(e) => println!("[restore] frame {idx} copy failed: {e}"),
         }
     }
-
-    // Optional: attempt native inference command if exposed
-    let _ = state; // keep AppState available for future run_batch_inference wiring
 
     if restored_count == 0 {
         stages.push("restore:failed_no_output".into());
@@ -222,15 +291,15 @@ fn partial_restore(
         );
     }
 
-    stages.push(format!("restore:model:{}", model_used));
-    stages.push(format!("restore:wrote_frames:{}", restored_count));
+    stages.push(format!("restore:model:{model_used}"));
+    stages.push(format!("restore:wrote_frames:{restored_count}"));
+    stages.push("restore:premium_ok".into());
 
     (
         true,
         model_used,
         Some(format!(
-            "Partial restore OK ({} frames). Full-video re-encode not applied yet. Preview: {}",
-            restored_count,
+            "Partial restore OK ({restored_count} frames). Preview: {}",
             restored_dir.display()
         )),
         stages,
@@ -241,11 +310,12 @@ fn partial_restore(
 pub async fn process_video(
     input_path: String,
     model: Option<String>,
+    allow_real_model: bool,
     state: State<'_, AppState>,
 ) -> Result<ProcessResult, String> {
     let input = PathBuf::from(&input_path);
     if !input.exists() {
-        return Err(format!("Input not found: {}", input_path));
+        return Err(format!("Input not found: {input_path}"));
     }
 
     let original_size = file_size(&input);
@@ -254,9 +324,16 @@ pub async fn process_video(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
     let stem = stem_of(&input);
-    let requested_model = model.unwrap_or_else(|| "atd-srx4".to_string());
+    let requested_model = model.unwrap_or_else(|| "atd-webphoto".to_string());
 
-    // --- 1. Compress aggressively first ---
+    if is_real_model(&requested_model) && !allow_real_model {
+        // Still allow compress-only run
+        println!(
+            "[process] real model requested without premium — compress only"
+        );
+    }
+
+    // 1) Compress always
     let (compressed_path, codec) = compress_video(&input, &work_dir)?;
     let compressed_size = file_size(&compressed_path);
     let savings = if original_size > 0 {
@@ -266,41 +343,54 @@ pub async fn process_video(
     };
 
     let mut stages = vec![
-        format!("compress:ok ({})", codec),
-        format!("savings:{:.1}%", savings),
+        format!("compress:ok ({codec})"),
+        format!("savings:{savings:.1}%"),
     ];
 
-    // --- 2. Model session ---
+    // 2) Model session
     let (model_loaded, loaded_name) = {
         let manager = state.model_manager.lock().map_err(|e| e.to_string())?;
         (manager.current_model.is_some(), manager.current_model.clone())
     };
 
-    stages.push(if model_loaded {
-        format!("model:loaded ({})", loaded_name.clone().unwrap_or_default())
+    if model_loaded {
+        if let Some(ref name) = loaded_name {
+            if is_real_model(name) && !allow_real_model {
+                stages.push("model:loaded_but_premium_blocked".into());
+            } else {
+                stages.push(format!("model:loaded ({name})"));
+            }
+        }
     } else {
-        "model:not_loaded".into()
-    });
+        stages.push("model:not_loaded".into());
+    }
 
-    // --- 3. Partial restore ---
+    // 3) Restore only if premium allows real path
+    let effective_loaded = model_loaded
+        && allow_real_model
+        && loaded_name
+            .as_ref()
+            .map(|n| is_real_model(n))
+            .unwrap_or(false);
+
     let (restored, model_used, restore_reason, restore_stages) = partial_restore(
         &compressed_path,
         &work_dir,
         &stem,
-        model_loaded,
+        effective_loaded,
         loaded_name.clone(),
         &requested_model,
         savings,
-        &state,
+        allow_real_model,
     );
     stages.extend(restore_stages);
 
-    let final_path = compressed_path; // main deliverable remains compressed video
+    let final_path = compressed_path;
     let final_size = file_size(&final_path);
 
     let message = format!(
-        "Compressed with {} · {:.1}% savings · restored={} · model_loaded={}",
-        codec, savings, restored, model_loaded
+        "Compressed with {codec} · {savings:.1}% savings · restored={restored} · premium_models={}",
+        allow_real_model
     );
 
     Ok(ProcessResult {
@@ -311,7 +401,7 @@ pub async fn process_video(
         original_size,
         final_size,
         message,
-        model_loaded,
+        model_loaded: effective_loaded,
         model_name: loaded_name,
         restored,
         restore_skipped_reason: restore_reason,

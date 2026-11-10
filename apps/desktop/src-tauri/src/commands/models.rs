@@ -4,6 +4,18 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tauri::{AppHandle, Manager, State};
 use crate::state::AppState;
 
+const REAL_MODELS: &[&str] = &[
+    "rgt-webphoto",
+    "atd-webphoto",
+    "rgt-s",
+    "atd-srx4",
+    "4x-bhi",
+];
+
+fn is_real_model(name: &str) -> bool {
+    REAL_MODELS.iter().any(|m| *m == name)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelMetadata {
     pub name: String,
@@ -62,8 +74,15 @@ fn get_model_path(app: &AppHandle, model_name: &str) -> Result<PathBuf, String> 
 pub async fn load_model(
     app: AppHandle,
     model_name: String,
+    allow_real_model: bool,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if is_real_model(&model_name) && !allow_real_model {
+        return Err(
+            "Premium required to load real restoration models on Desktop.".into(),
+        );
+    }
+
     let model_path = get_model_path(&app, &model_name)?;
     if !model_path.exists() {
         return Err(format!(
@@ -110,7 +129,6 @@ pub async fn unload_model(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// System-memory estimate (true VRAM needs Metal/CUDA APIs later).
 #[tauri::command]
 pub async fn get_gpu_memory_info() -> Result<GpuMemoryInfo, String> {
     let mut sys = System::new_with_specifics(
@@ -131,22 +149,31 @@ pub async fn get_gpu_memory_info() -> Result<GpuMemoryInfo, String> {
     })
 }
 
-/// Placeholder batch path until real Candle/ONNX forward is wired.
-/// Expects flat RGB `batch * 3 * H * W`, returns 4× spatial upsample.
+/// Placeholder until real Candle/ONNX forward is wired.
+/// Blocked without Premium if a real model is the active session.
 #[tauri::command]
 pub async fn run_batch_inference(
     input_data: Vec<f32>,
     batch_size: usize,
     height: usize,
     width: usize,
+    allow_real_model: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<f32>, String> {
     let manager = state.model_manager.lock().map_err(|e| e.to_string())?;
-    if manager.current_model.is_none() {
-        return Err("No model loaded. Call load_model first.".into());
+    let name = manager
+        .current_model
+        .as_ref()
+        .ok_or_else(|| "No model loaded. Call load_model first.".to_string())?;
+
+    if is_real_model(name) && !allow_real_model {
+        return Err("Premium required for real model inference on Desktop.".into());
     }
 
-    let expected = batch_size.saturating_mul(3).saturating_mul(height).saturating_mul(width);
+    let expected = batch_size
+        .saturating_mul(3)
+        .saturating_mul(height)
+        .saturating_mul(width);
     if input_data.len() != expected {
         return Err(format!(
             "Invalid tensor size: got {}, expected {} (Bx3xHxW)",
@@ -165,8 +192,10 @@ pub async fn run_batch_inference(
                 for x in 0..out_w {
                     let sy = y / 4;
                     let sx = x / 4;
-                    let src = b * 3 * height * width + c * height * width + sy * width + sx;
-                    let dst = b * 3 * out_h * out_w + c * out_h * out_w + y * out_w + x;
+                    let src =
+                        b * 3 * height * width + c * height * width + sy * width + sx;
+                    let dst =
+                        b * 3 * out_h * out_w + c * out_h * out_w + y * out_w + x;
                     output[dst] = input_data[src];
                 }
             }

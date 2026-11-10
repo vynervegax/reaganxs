@@ -1,41 +1,66 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request } from 'express';
+import {
+  isMimeAllowed,
+  resolveMediaKind,
+  MEDIA_KINDS,
+} from '../config/mediaKinds';
+import { PROGRESSIVE_OFFERINGS, type UserTier } from '../config/tiers';
 
-export const validateFileMiddleware = (req: Request, res: Response, next: NextFunction) => {
-  const file = req.file;
+export function assertAllowedUpload(opts: {
+  mime?: string | null;
+  filename?: string | null;
+  size?: number;
+  tier?: string;
+}): { mediaKind: string } {
+  const { mime, filename, size = 0, tier = 'demo' } = opts;
 
-  if (!file) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'No file uploaded' 
-    });
+  if (!isMimeAllowed(mime, filename)) {
+    throw Object.assign(
+      new Error(
+        'Unsupported media type. Enabled: video and image (audio/text coming soon).'
+      ),
+      { status: 415 }
+    );
   }
 
-  // File type validation
-  if (!file.mimetype.startsWith('video/')) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Only video files are allowed' 
-    });
+  const mediaKind = resolveMediaKind(mime, filename);
+  const kindCfg = MEDIA_KINDS[mediaKind as keyof typeof MEDIA_KINDS];
+  const offering =
+    PROGRESSIVE_OFFERINGS[(tier as UserTier) || 'demo'] ||
+    PROGRESSIVE_OFFERINGS.demo;
+
+  const maxMb =
+    kindCfg?.maxFileSizeMB != null
+      ? kindCfg.maxFileSizeMB
+      : offering.maxFileSizeMB;
+  const maxBytes = maxMb * 1024 * 1024;
+
+  if (size > maxBytes) {
+    throw Object.assign(
+      new Error(
+        `File too large for ${mediaKind} on ${offering.label} tier (max ${maxMb} MB).`
+      ),
+      { status: 413 }
+    );
   }
 
-  // File extension validation
-  const allowedExtensions = ['.mp4', '.mov', '.avi', '.webm', '.mkv'];
-  const fileExt = '.' + file.originalname.split('.').pop()?.toLowerCase();
-  
-  if (!allowedExtensions.includes(fileExt)) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Unsupported video format' 
-    });
-  }
+  return { mediaKind };
+}
 
-  // Size limit (2GB)
-  if (file.size > 2 * 1024 * 1024 * 1024) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'File size exceeds 2GB limit' 
-    });
+/** Multer fileFilter */
+export function multerMediaFilter(
+  _req: Request,
+  file: Express.Multer.File,
+  cb: (error: Error | null, acceptFile?: boolean) => void
+) {
+  try {
+    if (!isMimeAllowed(file.mimetype, file.originalname)) {
+      return cb(
+        new Error('Only enabled media types are allowed (video, image).')
+      );
+    }
+    cb(null, true);
+  } catch (e: any) {
+    cb(e);
   }
-
-  next();
-};
+}

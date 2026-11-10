@@ -13,7 +13,8 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState('idle');
-  const [selectedModel, setSelectedModel] = useState('atd-srx4');
+  const [selectedModel, setSelectedModel] = useState('atd-webphoto');
+  const [allowRealModel, setAllowRealModel] = useState(false);
   const [modelStatus, setModelStatus] = useState<{
     loaded: boolean;
     name?: string | null;
@@ -37,7 +38,11 @@ export default function App() {
 
     try {
       setProgress(40);
-      const res = await tauriApi.processVideo(filePath, selectedModel);
+      const res = await tauriApi.processVideo(
+        filePath,
+        selectedModel,
+        allowRealModel
+      );
       setProgress(100);
       setStage('complete');
       setResult(res);
@@ -51,12 +56,13 @@ export default function App() {
     }
   };
 
-  const handleModelChange = async (modelId: string) => {
+  /** ModelSelector reports (id, allowReal) after entitlement check */
+  const handleModelChange = (modelId: string, allow: boolean) => {
     setSelectedModel(modelId);
-    try {
-      await tauriApi.loadModel(modelId);
+    setAllowRealModel(allow);
+    if (allow) {
       setModelStatus({ loaded: true, name: modelId });
-    } catch {
+    } else {
       setModelStatus({ loaded: false, name: null });
     }
   };
@@ -72,7 +78,7 @@ export default function App() {
               </span>
             </h1>
             <p className="text-sm text-[#c084fc]/80 mt-1">
-              Desktop · compress first · restore selectively
+              Desktop · compress first · real RGT/ATD with Premium
             </p>
           </div>
           <span className="text-xs px-4 py-1.5 rounded-full bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black font-semibold shadow-lg shadow-[#c084fc]/25">
@@ -87,13 +93,31 @@ export default function App() {
           onModelChange={handleModelChange}
         />
 
-        <div className="text-xs">
-          <span className="text-white/40">Model session · </span>
-          <span className={modelStatus.loaded ? 'text-[#c084fc]' : 'text-amber-300'}>
-            {modelStatus.loaded
-              ? `Loaded (${modelStatus.name})`
-              : 'Not loaded — compression still works'}
-          </span>
+        <div className="text-xs space-y-1">
+          <div>
+            <span className="text-white/40">Model session · </span>
+            <span
+              className={
+                modelStatus.loaded ? 'text-[#c084fc]' : 'text-amber-300'
+              }
+            >
+              {modelStatus.loaded
+                ? `Loaded (${modelStatus.name})`
+                : 'Not loaded — compression still works'}
+            </span>
+          </div>
+          <div>
+            <span className="text-white/40">Real inference · </span>
+            <span
+              className={
+                allowRealModel ? 'text-emerald-300' : 'text-amber-200/90'
+              }
+            >
+              {allowRealModel
+                ? 'Premium unlocked'
+                : 'Locked — Premium required for RGT/ATD'}
+            </span>
+          </div>
         </div>
 
         {!result && (
@@ -107,7 +131,9 @@ export default function App() {
             message={
               stage === 'compressing'
                 ? 'Compressing (SVT-AV1 → VP9)…'
-                : 'Working…'
+                : allowRealModel
+                  ? 'Restoring (Premium models)…'
+                  : 'Working…'
             }
           />
         )}
@@ -121,7 +147,9 @@ export default function App() {
         {result && (
           <div className="space-y-6">
             <div className="rounded-3xl border border-[#c084fc]/35 bg-gradient-to-br from-[#c084fc]/15 via-transparent to-[#f97316]/10 p-5">
-              <p className="text-[#c084fc] font-medium text-sm">Processing complete</p>
+              <p className="text-[#c084fc] font-medium text-sm">
+                Processing complete
+              </p>
               <p className="text-xs text-white/50 mt-1">
                 {result.message ||
                   (result.did_restore || result.restored
@@ -133,7 +161,9 @@ export default function App() {
             <div className="grid sm:grid-cols-3 gap-4">
               <div className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4">
                 <p className="text-xs text-[#c084fc]/70 mb-1">Codec</p>
-                <p className="font-medium">{result.codec || 'svt-av1 / vp9'}</p>
+                <p className="font-medium">
+                  {result.codec || 'svt-av1 / vp9'}
+                </p>
               </div>
               <div className="rounded-2xl border border-[#c084fc]/20 bg-white/5 p-4">
                 <p className="text-xs text-[#c084fc]/70 mb-1">Savings</p>

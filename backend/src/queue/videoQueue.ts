@@ -5,38 +5,41 @@ const connection = new IORedis(process.env.REDIS_URL || 'redis://127.0.0.1:6379'
   maxRetriesPerRequest: null,
 });
 
-export const videoQueue = new Queue('video-process', { connection });
-
 export type VideoJobData = {
   jobId: string;
   filePath?: string;
-  originalFilename: string;
   originalSize: number;
+  userId?: string | null;
+  tier?: string;
+  preferredModel?: string;
+  deviceProfile?: Record<string, unknown>;
+  skipCompress?: boolean;
   compressedSize?: number;
   codec?: string;
-  skipCompress?: boolean;
-  /** Resume after successful compress */
-  resumeFrom?: 'compress' | 'restore' | 'finalize';
-  compressedKey?: string;
-  userId: string | null;
-  tier: string;
-  preferredModel?: string;
-  deviceProfile: any;
   r2Key?: string;
+  resumeFrom?: 'restore' | string;
+  compressedKey?: string;
+  /** skeletal multi-media */
+  mediaKind?: 'video' | 'image' | 'audio' | 'text' | 'custom';
+  mimeType?: string;
+  originalFilename?: string;
 };
 
-export async function removeQueuedBullJobs(mongoJobId: string): Promise<number> {
-  const states = ['waiting', 'delayed'] as const;
-  let removed = 0;
+export const videoQueue = new Queue<VideoJobData>('video-process', {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: 100,
+    removeOnFail: 50,
+    attempts: 1,
+  },
+});
 
-  for (const state of states) {
-    const jobs = await videoQueue.getJobs([state], 0, 200);
-    for (const j of jobs) {
-      if (j.data?.jobId === String(mongoJobId)) {
-        await j.remove();
-        removed++;
-      }
-    }
-  }
-  return removed;
+export async function enqueueMediaJob(
+  data: VideoJobData,
+  opts?: { priority?: number }
+) {
+  return videoQueue.add('process', data, {
+    priority: opts?.priority ?? 5,
+    jobId: undefined,
+  });
 }
