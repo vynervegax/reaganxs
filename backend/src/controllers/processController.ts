@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { ProcessingJob } from '../models/ProcessingJob';
+import { ProcessingJob, type IProcessingJob } from '../models/ProcessingJob';
 import { videoQueue, removeQueuedBullJobs } from '../queue/videoQueue';
 import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
 import { assertAllowedUpload } from '../middleware/validateFile';
-import { resolveMediaKind } from '../config/mediaKinds';
+import { resolveMediaKind, type MediaKind } from '../config/mediaKinds';
 
 type AuthedUser = {
   id?: string;
@@ -31,17 +31,12 @@ function parseDeviceProfile(body: any): Record<string, unknown> {
 }
 
 export const processController = {
-  /**
-   * Multipart upload — video or image (enabled MEDIA_KINDS).
-   * Field name remains `video` for multer compatibility; mediaKind is derived.
-   */
   async processVideo(req: Request, res: Response) {
     const file = req.file;
     if (!file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No file uploaded',
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: 'No file uploaded' });
     }
 
     const user = (req as any).user as AuthedUser | undefined;
@@ -49,7 +44,7 @@ export const processController = {
     const userId = user?.id || user?._id || null;
     const deviceProfile = parseDeviceProfile(req.body);
 
-    let mediaKind: string;
+    let mediaKind: MediaKind;
     try {
       const allowed = assertAllowedUpload({
         mime: file.mimetype,
@@ -57,10 +52,12 @@ export const processController = {
         size: file.size,
         tier,
       });
+      const fromBody =
+        typeof req.body?.mediaKind === 'string'
+          ? (req.body.mediaKind as MediaKind)
+          : null;
       mediaKind =
-        (typeof req.body?.mediaKind === 'string' && req.body.mediaKind) ||
-        allowed.mediaKind ||
-        resolveMediaKind(file.mimetype, file.originalname);
+        fromBody || allowed.mediaKind || resolveMediaKind(file.mimetype, file.originalname);
     } catch (e: any) {
       const status = e?.status || 400;
       return res.status(status).json({
@@ -89,9 +86,7 @@ export const processController = {
         originalSize: file.size,
         userId: userId ? String(userId) : null,
         tier,
-        preferredModel: req.body?.model
-          ? String(req.body.model)
-          : undefined,
+        preferredModel: req.body?.model ? String(req.body.model) : undefined,
         deviceProfile,
         mediaKind,
         mimeType: file.mimetype,
@@ -112,7 +107,9 @@ export const processController = {
   },
 
   async getJobStatus(req: Request, res: Response) {
-    const job = await ProcessingJob.findById(req.params.id).lean();
+    const job = await ProcessingJob.findById(req.params.id).lean<
+      IProcessingJob | null
+    >();
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
@@ -133,12 +130,12 @@ export const processController = {
         codec: job.codec || null,
         originalSize: job.originalSize,
         finalSize: job.compressedSize || null,
-        compressedKey: (job as any).compressedKey || null,
-        mediaKind: (job as any).mediaKind || 'video',
-        mimeType: (job as any).mimeType || null,
+        compressedKey: job.compressedKey || null,
+        mediaKind: job.mediaKind || 'video',
+        mimeType: job.mimeType || null,
         canRetryRestore: Boolean(
           (job.status === 'failed' || job.status === 'cancelled') &&
-            (job as any).compressedKey
+            job.compressedKey
         ),
         error: job.error || null,
         previewFrames: job.previewFrameUrls || [],
@@ -199,10 +196,6 @@ export const processController = {
     });
   },
 
-  /**
-   * Retry from restore when compress already succeeded (compressedKey set).
-   * Works for video (and image if you set compressedKey the same way).
-   */
   async retryJob(req: Request, res: Response) {
     const job = await ProcessingJob.findById(req.params.id);
     if (!job) {
@@ -237,7 +230,7 @@ export const processController = {
 
     const promote = req.body?.promote === true || req.body?.promote === 'true';
     const priority = promote ? 1 : 8;
-    const mediaKind = (job as any).mediaKind || 'video';
+    const mediaKind: MediaKind = (job.mediaKind as MediaKind) || 'video';
 
     job.status = 'queued';
     job.progress = 35;
@@ -249,7 +242,7 @@ export const processController = {
       {
         jobId: String(job._id),
         originalFilename: job.originalFilename,
-        originalSize: job.originalSize,
+        originalSize: job.originalSize || 0,
         userId: job.userId ? String(job.userId) : null,
         tier: job.tier || 'demo',
         preferredModel: req.body?.model,
@@ -264,7 +257,7 @@ export const processController = {
         codec: job.codec,
         skipCompress: true,
         mediaKind,
-        mimeType: (job as any).mimeType,
+        mimeType: job.mimeType,
       },
       { removeOnComplete: 100, removeOnFail: 50, priority }
     );

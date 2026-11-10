@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { r2Service } from '../services/r2Service';
 import { ProcessingJob } from '../models/ProcessingJob';
-import { enqueueMediaJob } from '../queue/videoQueue';
-import { assertAllowedUpload, resolveMediaKindSafe } from '../utils/uploadHelpers';
-import { resolveMediaKind } from '../config/mediaKinds';
+import { videoQueue } from '../queue/videoQueue';
+import { assertAllowedUpload } from '../middleware/validateFile';
+import { resolveMediaKind, type MediaKind } from '../config/mediaKinds';
+import type { UserTier } from '../config/tiers';
 
-// If you prefer, inline assertAllowedUpload from validateFile instead of uploadHelpers
-
-type Authed = Request & { user?: { id?: string; _id?: string; tier?: string } };
+type Authed = Request & {
+  user?: { id?: string; _id?: string; tier?: string };
+};
 
 const router = Router();
 
@@ -21,7 +22,7 @@ router.post('/presign', async (req: Authed, res: Response) => {
       });
     }
 
-    const tier = req.user?.tier || 'demo';
+    const tier = (req.user?.tier as UserTier) || 'demo';
     assertAllowedUpload({
       mime: contentType,
       filename,
@@ -69,25 +70,26 @@ router.post('/complete', async (req: Authed, res: Response) => {
       });
     }
 
-    const tier = req.user?.tier || 'demo';
+    const tier = (req.user?.tier as UserTier) || 'demo';
     const userId = req.user?.id || req.user?._id || null;
     const size = Number(originalSize) || 0;
 
-    const { mediaKind } = assertAllowedUpload({
+    const { mediaKind: resolved } = assertAllowedUpload({
       mime: mimeType,
       filename: originalFilename,
       size,
       tier,
     });
 
-    const kind = bodyKind || mediaKind;
+    const mediaKind: MediaKind =
+      (bodyKind as MediaKind) || resolved || resolveMediaKind(mimeType, originalFilename);
 
     const job = await ProcessingJob.create({
       userId,
       tier,
       originalFilename,
       originalSize: size,
-      mediaKind: kind,
+      mediaKind,
       mimeType: mimeType || null,
       r2Key: key,
       status: 'queued',
@@ -96,19 +98,23 @@ router.post('/complete', async (req: Authed, res: Response) => {
       deviceProfile,
     });
 
-    const bull = await enqueueMediaJob({
-      jobId: String(job._id),
-      originalSize: size,
-      userId: userId ? String(userId) : null,
-      tier,
-      preferredModel: model,
-      deviceProfile,
-      r2Key: key,
-      skipCompress: Boolean(skipCompress),
-      mediaKind: kind,
-      mimeType,
-      originalFilename,
-    });
+    const bull = await videoQueue.add(
+      'process',
+      {
+        jobId: String(job._id),
+        originalSize: size,
+        userId: userId ? String(userId) : null,
+        tier,
+        preferredModel: model,
+        deviceProfile,
+        r2Key: key,
+        skipCompress: Boolean(skipCompress),
+        mediaKind,
+        mimeType,
+        originalFilename,
+      },
+      { removeOnComplete: 100, removeOnFail: 50, priority: 5 }
+    );
 
     job.bullJobId = String(bull.id);
     await job.save();
@@ -116,7 +122,7 @@ router.post('/complete', async (req: Authed, res: Response) => {
     return res.json({
       success: true,
       jobId: job._id,
-      mediaKind: kind,
+      mediaKind,
     });
   } catch (e: any) {
     const status = e?.status || 500;

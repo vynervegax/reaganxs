@@ -12,12 +12,14 @@ export type JobStatus =
   | 'failed'
   | 'cancelled';
 
+export type MediaKind = 'video' | 'image' | 'audio' | 'text' | 'custom';
+
 export interface IProcessingJob extends Document {
   userId?: mongoose.Types.ObjectId | string | null;
   tier?: string;
   originalFilename?: string;
   originalSize?: number;
-  mediaKind?: string;
+  mediaKind?: MediaKind;
   mimeType?: string;
   filePath?: string;
   r2Key?: string;
@@ -48,7 +50,12 @@ export interface IProcessingJob extends Document {
 
 const ProcessingJobSchema = new Schema<IProcessingJob>(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
     tier: { type: String, default: 'demo' },
     originalFilename: { type: String },
     originalSize: { type: Number },
