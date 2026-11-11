@@ -1,18 +1,19 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 45 * 60 * 1000;          // < 800 MB
-const AV1_TIMEOUT_LARGE_MS = 90 * 60 * 1000;    // 800–1200 MB
-const AV1_TIMEOUT_HUGE_MS = 150 * 60 * 1000;    // ≥ 1200 MB
+const AV1_TIMEOUT_MS = 25 * 60 * 1000;           // < 800 MB
+const AV1_TIMEOUT_LARGE_MS = 40 * 60 * 1000;     // 800–1500 MB
+const AV1_TIMEOUT_HUGE_MS = 65 * 60 * 1000;      // ≥ 1500 MB (up to ~3 GB → ~1 h)
 
-const VP9_TIMEOUT_MS = 25 * 60 * 1000;
-const VP9_TIMEOUT_LARGE_MS = 45 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 75 * 60 * 1000;
+const VP9_TIMEOUT_MS = 12 * 60 * 1000;
+const VP9_TIMEOUT_LARGE_MS = 20 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 35 * 60 * 1000;
 
 const LARGE_MB = 800;
-const HUGE_MB = 1200;
+const HUGE_MB = 1500;
 
 function inputMb(inputPath: string): number {
   try {
@@ -42,11 +43,17 @@ function vp9TimeoutFor(mb: number): number {
   return VP9_TIMEOUT_MS;
 }
 
-/** Faster preset only on huge inputs; CRF stays the same */
+/** Faster presets on bigger files so 3 GB stays near 1 hour. CRF unchanged. */
 function av1PresetFor(mb: number): string {
+  if (mb >= 2500) return '13';
   if (mb >= HUGE_MB) return '12';
-  if (mb >= LARGE_MB) return '10';
-  return COMPRESS.av1.preset;
+  if (mb >= LARGE_MB) return '11';
+  return COMPRESS.av1.preset; // '8'
+}
+
+function threadCount(): string {
+  const n = Math.min(6, Math.max(2, os.cpus().length));
+  return String(n);
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -95,9 +102,10 @@ export const compressionService = {
     const av1Timeout = av1TimeoutFor(mb);
     const vp9Timeout = vp9TimeoutFor(mb);
     const av1Preset = av1PresetFor(mb);
+    const threads = threadCount();
 
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset}`
+      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset} threads=${threads}`
     );
 
     const audio = [
@@ -107,7 +115,7 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
-    // Full resolution — no scale. CRF unchanged.
+    // Full resolution, CRF 28
     try {
       await run(
         [
@@ -120,7 +128,7 @@ export const compressionService = {
           '-crf', COMPRESS.av1.crf,
           '-pix_fmt', 'yuv420p',
           '-svtav1-params', 'lp=1',
-          '-threads', '2',
+          '-threads', threads,
           ...audio,
           '-movflags', '+faststart',
           '-sn',
@@ -140,8 +148,8 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    // VP9 fallback — still CRF-controlled, faster cpu-used on huge files
-    const cpuUsed = mb >= HUGE_MB ? '8' : '6';
+    // Fast VP9 fallback
+    const cpuUsed = mb >= HUGE_MB ? '8' : mb >= LARGE_MB ? '7' : '5';
     await run(
       [
         '-hide_banner', '-y',
@@ -154,7 +162,7 @@ export const compressionService = {
         '-cpu-used', cpuUsed,
         '-deadline', 'realtime',
         '-row-mt', '1',
-        '-threads', '2',
+        '-threads', threads,
         '-pix_fmt', 'yuv420p',
         ...audio,
         '-sn',
