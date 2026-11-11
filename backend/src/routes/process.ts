@@ -26,7 +26,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: MAX_UPLOAD_BYTES },
-  fileFilter: multerMediaFilter, // video + image only (enabled kinds)
+  fileFilter: multerMediaFilter,
 });
 
 const statusLimiter = rateLimit({
@@ -46,8 +46,8 @@ router.post(
   '/',
   optionalAuthenticate,
   tierGuard('demo'),
-  upload.single('video'), // field name stays "video"; images OK via filter
-  validateFileMiddleware, // assert MIME + tier size after multer
+  upload.single('video'),
+  validateFileMiddleware,
   processController.processVideo
 );
 

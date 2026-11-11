@@ -8,7 +8,6 @@ export type MediaKindConfig = {
   maxFileSizeMB: number | null;
   processor: 'video' | 'image' | 'audio' | 'text' | 'passthrough';
   enabled: boolean;
-  enterpriseOnly?: boolean;
 };
 
 export const MEDIA_KINDS: Record<MediaKind, MediaKindConfig> = {
@@ -25,17 +24,7 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindConfig> = {
     id: 'image',
     label: 'Image / graphic',
     mimeAllow: ['image/'],
-    extensions: [
-      '.png',
-      '.jpg',
-      '.jpeg',
-      '.webp',
-      '.avif',
-      '.gif',
-      '.tif',
-      '.tiff',
-      '.bmp',
-    ],
+    extensions: ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.bmp'],
     maxFileSizeMB: null,
     processor: 'image',
     enabled: true,
@@ -51,28 +40,23 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindConfig> = {
   },
   text: {
     id: 'text',
-    label: 'Text / subtitle / document',
-    mimeAllow: ['text/', 'application/pdf', 'application/json'],
-    extensions: ['.txt', '.srt', '.vtt', '.pdf', '.json'],
+    label: 'Text',
+    mimeAllow: ['text/', 'application/pdf'],
+    extensions: ['.txt', '.srt', '.vtt', '.pdf'],
     maxFileSizeMB: 50,
     processor: 'text',
     enabled: false,
   },
   custom: {
     id: 'custom',
-    label: 'Custom (enterprise)',
+    label: 'Custom',
     mimeAllow: [],
     extensions: [],
     maxFileSizeMB: null,
     processor: 'passthrough',
     enabled: false,
-    enterpriseOnly: true,
   },
 };
-
-export function listEnabledMediaKinds(): MediaKindConfig[] {
-  return Object.values(MEDIA_KINDS).filter((k) => k.enabled);
-}
 
 export function resolveMediaKind(
   mime?: string | null,
@@ -84,10 +68,7 @@ export function resolveMediaKind(
 
   for (const cfg of Object.values(MEDIA_KINDS)) {
     if (!cfg.enabled) continue;
-    if (
-      m &&
-      cfg.mimeAllow.some((p) => (p.endsWith('/') ? m.startsWith(p) : m === p))
-    ) {
+    if (m && cfg.mimeAllow.some((p) => (p.endsWith('/') ? m.startsWith(p) : m === p))) {
       return cfg.id;
     }
     if (ext && cfg.extensions.includes(ext)) return cfg.id;
@@ -95,22 +76,14 @@ export function resolveMediaKind(
   return 'video';
 }
 
-export function isMimeAllowed(
-  mime?: string | null,
-  filename?: string | null
-): boolean {
+export function isMimeAllowed(mime?: string | null, filename?: string | null): boolean {
   const kind = resolveMediaKind(mime, filename);
   const cfg = MEDIA_KINDS[kind];
   if (!cfg?.enabled) return false;
   const m = (mime || '').toLowerCase();
   const name = (filename || '').toLowerCase();
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-  if (
-    m &&
-    cfg.mimeAllow.some((p) => (p.endsWith('/') ? m.startsWith(p) : m === p))
-  ) {
-    return true;
-  }
+  if (m && cfg.mimeAllow.some((p) => (p.endsWith('/') ? m.startsWith(p) : m === p))) return true;
   if (ext && cfg.extensions.includes(ext)) return true;
   return false;
 }

@@ -23,6 +23,7 @@ export type ProcessJobResult = {
   expiryHours?: number;
   stages?: string[];
   mediaKind?: string;
+  previewFrames?: string[];
 };
 
 type Props = {
@@ -45,9 +46,8 @@ const API_BASE = (
 const LARGE_UPLOAD_BYTES = 200 * 1024 * 1024;
 const ACTIVE_JOB_KEY = 'reaganxs_active_job';
 
-/** Keep in sync with backend MEDIA_KINDS enabled flags */
 const ACCEPT =
-  'video/*,image/png,image/jpeg,image/jpg,image/webp,image/avif,image/gif,.png,.jpg,.jpeg,.webp,.avif,.gif,.mp4,.mov,.webm';
+  'video/*,image/png,image/jpeg,image/jpg,image/webp,image/avif,image/gif,.png,.jpg,.jpeg,.webp,.avif,.gif,.mp4,.mov,.webm,.mkv,.avi';
 
 function detectMediaKind(file: File): 'video' | 'image' {
   if (file.type.startsWith('image/')) return 'image';
@@ -112,8 +112,9 @@ export default function UploadZone({
       }
     }
     try {
-      if (abortRef.current instanceof AbortController) abortRef.current.abort();
-      else if (abortRef.current && 'abort' in abortRef.current) {
+      if (abortRef.current instanceof AbortController) {
+        abortRef.current.abort();
+      } else if (abortRef.current && 'abort' in abortRef.current) {
         (abortRef.current as XMLHttpRequest).abort();
       }
     } catch {
@@ -130,8 +131,10 @@ export default function UploadZone({
   const pollUntilDone = useCallback(
     async (jobId: string, file: File): Promise<void> => {
       rememberJob(jobId);
+
       const poll = async (): Promise<void> => {
         if (cancelledRef.current) throw new Error('Cancelled');
+
         const r = await fetch(`${API_BASE}/api/process/${jobId}`);
         if (r.status === 429) {
           setStatus('Checking status…');
@@ -146,9 +149,11 @@ export default function UploadZone({
           }
           throw new Error(d.message || 'Status check failed');
         }
+
         const j = d.job;
         setProgress(Math.min(99, Math.max(10, j.progress || 10)));
         setStatus(j.status || 'Processing…');
+
         if (j.status === 'completed') {
           setProgress(100);
           setStatus('Done');
@@ -166,8 +171,8 @@ export default function UploadZone({
             isDemo: !isLoggedIn,
             vmafScore: j.vmafScore,
             mediaKind: j.mediaKind,
-            previewFrames: j.previewFrameUrls,
-          } as ProcessJobResult);
+            previewFrames: j.previewFrames || j.previewFrameUrls || [],
+          });
           return;
         }
         if (j.status === 'failed') {
@@ -190,11 +195,13 @@ export default function UploadZone({
     async (file: File) => {
       setStatus('Uploading…');
       setProgress(5);
+
       const ac = new AbortController();
       abortRef.current = ac;
+
       const kind = detectMediaKind(file);
       const form = new FormData();
-      form.append('video', file); // field name may stay "video" for multer compat
+      form.append('video', file);
       form.append('mediaKind', kind);
       if (deviceProfile) {
         form.append('deviceProfile', JSON.stringify(deviceProfile));
@@ -211,10 +218,12 @@ export default function UploadZone({
         maxDelayMs: 4000,
         onRetry: () => setStatus('Upload interrupted — retrying once…'),
       });
+
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || data.success === false) {
         throw new Error(data.message || `Upload failed (${res.status})`);
       }
+
       setStatus('queued');
       setProgress(20);
       await pollUntilDone(String(data.jobId), file);
@@ -226,11 +235,13 @@ export default function UploadZone({
     async (file: File) => {
       setStatus('Large file — preparing direct upload…');
       setProgress(3);
+
       const kind = detectMediaKind(file);
       const headers = {
         ...authHeaders(),
         'Content-Type': 'application/json',
       };
+
       const presignRes = await fetch(`${API_BASE}/api/upload/presign`, {
         method: 'POST',
         headers,
@@ -242,11 +253,15 @@ export default function UploadZone({
       const presignData = await presignRes.json().catch(() => ({} as any));
       if (!presignRes.ok || !presignData.uploadUrl) {
         throw new Error(
-          presignData.message || 'Direct upload not available for this file.'
+          presignData.message ||
+            'Direct upload not available. Try a smaller file or check API routes.'
         );
       }
       const { uploadUrl, key } = presignData;
+
       setStatus('Uploading directly to storage…');
+      setProgress(5);
+
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         abortRef.current = xhr;
@@ -255,23 +270,31 @@ export default function UploadZone({
           'Content-Type',
           file.type || 'application/octet-stream'
         );
+
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
             setProgress(5 + Math.round((e.loaded / e.total) * 50));
-            setStatus(`Uploading… ${Math.round((e.loaded / e.total) * 100)}%`);
+            setStatus(`Uploading… ${pct}%`);
           }
         };
-        xhr.onload = () =>
-          xhr.status >= 200 && xhr.status < 300
-            ? resolve()
-            : reject(new Error(`Storage upload failed (${xhr.status})`));
-        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Storage upload failed (${xhr.status})`));
+        };
+        xhr.onerror = () =>
+          reject(
+            new Error(
+              'Network error during direct upload (check R2 CORS for your site origin)'
+            )
+          );
         xhr.onabort = () => reject(new Error('Upload cancelled'));
         xhr.send(file);
       });
 
       setStatus('Starting processing…');
       setProgress(58);
+
       const completeRes = await fetch(`${API_BASE}/api/upload/complete`, {
         method: 'POST',
         headers,
@@ -292,6 +315,7 @@ export default function UploadZone({
           completeData.message || 'Failed to start processing after upload'
         );
       }
+
       setStatus('queued');
       setProgress(65);
       await pollUntilDone(String(completeData.jobId), file);
@@ -305,9 +329,13 @@ export default function UploadZone({
       setUploading(true);
       setProgress(1);
       cancelledRef.current = false;
+
       try {
-        if (file.size >= LARGE_UPLOAD_BYTES) await uploadLargeViaR2(file);
-        else await uploadClassic(file);
+        if (file.size >= LARGE_UPLOAD_BYTES) {
+          await uploadLargeViaR2(file);
+        } else {
+          await uploadClassic(file);
+        }
       } catch (err: any) {
         if (
           err?.name === 'AbortError' ||
@@ -327,10 +355,18 @@ export default function UploadZone({
     [uploadClassic, uploadLargeViaR2]
   );
 
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) upload(f);
+  };
+
   const showCancel =
     uploading &&
     (status === 'queued' ||
       status === 'pending' ||
+      status === 'Queued…' ||
       status.toLowerCase().includes('queue'));
 
   return (
@@ -341,12 +377,7 @@ export default function UploadZone({
           setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragging(false);
-          const f = e.dataTransfer.files?.[0];
-          if (f) upload(f);
-        }}
+        onDrop={onDrop}
         className={`rounded-3xl border-2 border-dashed p-10 text-center transition ${
           dragging
             ? 'border-[#f97316] bg-[#f97316]/10'
@@ -357,8 +388,9 @@ export default function UploadZone({
           Drop a video or image here
         </p>
         <p className="text-sm text-white/50 mb-6">
-          Video · PNG · JPEG · WebP · AVIF — compress first, restore selectively
+          Video · PNG · JPEG · WebP · AVIF · compress first, restore selectively
         </p>
+
         <label className="inline-flex cursor-pointer px-6 py-3 rounded-2xl font-semibold text-black bg-gradient-to-r from-[#f97316] to-[#c084fc]">
           {uploading ? 'Processing…' : 'Choose file'}
           <input
@@ -372,6 +404,7 @@ export default function UploadZone({
             }}
           />
         </label>
+
         {uploading && (
           <div className="mt-6 space-y-3">
             <div className="h-2 rounded-full bg-white/10 overflow-hidden">
@@ -394,11 +427,17 @@ export default function UploadZone({
           </div>
         )}
       </div>
+
       {error && (
         <div className="text-sm text-red-300 bg-red-900/30 border border-red-700/40 rounded-2xl p-4">
           {error}
         </div>
       )}
+
+      <p className="text-[11px] text-white/30 text-center">
+        Restorative Encoder Applying Generative AI for Near-Lossless Sequences
+        (REAGANXS)
+      </p>
     </div>
   );
 }

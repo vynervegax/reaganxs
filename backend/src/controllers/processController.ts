@@ -1,70 +1,41 @@
 import { Request, Response } from 'express';
-import { ProcessingJob, type IProcessingJob } from '../models/ProcessingJob';
+import { ProcessingJob } from '../models/ProcessingJob';
 import { videoQueue, removeQueuedBullJobs } from '../queue/videoQueue';
 import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
-import { assertAllowedUpload } from '../middleware/validateFile';
 import { resolveMediaKind, type MediaKind } from '../config/mediaKinds';
-
-type AuthedUser = {
-  id?: string;
-  _id?: string;
-  tier?: UserTier;
-  preferredModel?: string;
-};
-
-function parseDeviceProfile(body: any): Record<string, unknown> {
-  let deviceProfile: any = { vram: 4, batteryLevel: 100, isLowPower: false };
-  try {
-    if (typeof body?.deviceProfile === 'string') {
-      deviceProfile = JSON.parse(body.deviceProfile);
-    } else if (body?.deviceProfile && typeof body.deviceProfile === 'object') {
-      deviceProfile = body.deviceProfile;
-    }
-  } catch {
-    /* defaults */
-  }
-  if (body?.model) {
-    deviceProfile.preferredModel = String(body.model);
-  }
-  return deviceProfile;
-}
 
 export const processController = {
   async processVideo(req: Request, res: Response) {
     const file = req.file;
     if (!file) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'No file uploaded' });
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
-    const user = (req as any).user as AuthedUser | undefined;
+    const user = (req as any).user as
+      | { id?: string; _id?: string; tier?: UserTier; preferredModel?: string }
+      | undefined;
+
+    let deviceProfile: any = { vram: 4, batteryLevel: 100, isLowPower: false };
+    try {
+      if (typeof req.body?.deviceProfile === 'string') {
+        deviceProfile = JSON.parse(req.body.deviceProfile);
+      } else if (req.body?.deviceProfile && typeof req.body.deviceProfile === 'object') {
+        deviceProfile = req.body.deviceProfile;
+      }
+    } catch {
+      /* defaults */
+    }
+    if (req.body?.model) {
+      deviceProfile.preferredModel = String(req.body.model);
+    }
+
     const tier = ((user?.tier as UserTier) || 'demo') as UserTier;
     const userId = user?.id || user?._id || null;
-    const deviceProfile = parseDeviceProfile(req.body);
 
-    let mediaKind: MediaKind;
-    try {
-      const allowed = assertAllowedUpload({
-        mime: file.mimetype,
-        filename: file.originalname,
-        size: file.size,
-        tier,
-      });
-      const fromBody =
-        typeof req.body?.mediaKind === 'string'
-          ? (req.body.mediaKind as MediaKind)
-          : null;
-      mediaKind =
-        fromBody || allowed.mediaKind || resolveMediaKind(file.mimetype, file.originalname);
-    } catch (e: any) {
-      const status = e?.status || 400;
-      return res.status(status).json({
-        success: false,
-        message: e?.message || 'Unsupported media type',
-      });
-    }
+    const mediaKind: MediaKind =
+      ((req as any).mediaKind as MediaKind) ||
+      resolveMediaKind(file.mimetype, file.originalname);
 
     const job = await ProcessingJob.create({
       userId,
@@ -107,9 +78,7 @@ export const processController = {
   },
 
   async getJobStatus(req: Request, res: Response) {
-    const job = await ProcessingJob.findById(req.params.id).lean<
-      IProcessingJob | null
-    >();
+    const job = await ProcessingJob.findById(req.params.id).lean();
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
@@ -130,12 +99,11 @@ export const processController = {
         codec: job.codec || null,
         originalSize: job.originalSize,
         finalSize: job.compressedSize || null,
-        compressedKey: job.compressedKey || null,
-        mediaKind: job.mediaKind || 'video',
-        mimeType: job.mimeType || null,
+        compressedKey: (job as any).compressedKey || null,
+        mediaKind: (job as any).mediaKind || 'video',
         canRetryRestore: Boolean(
           (job.status === 'failed' || job.status === 'cancelled') &&
-            job.compressedKey
+            (job as any).compressedKey
         ),
         error: job.error || null,
         previewFrames: job.previewFrameUrls || [],
@@ -209,9 +177,7 @@ export const processController = {
     }
 
     if (job.status === 'completed') {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Already completed' });
+      return res.status(400).json({ success: false, message: 'Already completed' });
     }
 
     if (!job.compressedKey) {
@@ -230,7 +196,7 @@ export const processController = {
 
     const promote = req.body?.promote === true || req.body?.promote === 'true';
     const priority = promote ? 1 : 8;
-    const mediaKind: MediaKind = (job.mediaKind as MediaKind) || 'video';
+    const mediaKind = (job as any).mediaKind || 'video';
 
     job.status = 'queued';
     job.progress = 35;
@@ -242,7 +208,7 @@ export const processController = {
       {
         jobId: String(job._id),
         originalFilename: job.originalFilename,
-        originalSize: job.originalSize || 0,
+        originalSize: job.originalSize,
         userId: job.userId ? String(job.userId) : null,
         tier: job.tier || 'demo',
         preferredModel: req.body?.model,
@@ -257,7 +223,6 @@ export const processController = {
         codec: job.codec,
         skipCompress: true,
         mediaKind,
-        mimeType: job.mimeType,
       },
       { removeOnComplete: 100, removeOnFail: 50, priority }
     );

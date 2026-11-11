@@ -16,9 +16,7 @@ export function assertAllowedUpload(opts: {
   const { mime, filename, size = 0, tier = 'demo' } = opts;
 
   if (!isMimeAllowed(mime, filename)) {
-    const err: any = new Error(
-      'Unsupported media type. Enabled: video and image.'
-    );
+    const err: any = new Error('Unsupported media type. Enabled: video and image.');
     err.status = 415;
     throw err;
   }
@@ -29,10 +27,9 @@ export function assertAllowedUpload(opts: {
     PROGRESSIVE_OFFERINGS[(tier as UserTier) || 'demo'] ||
     PROGRESSIVE_OFFERINGS.demo;
 
-  const maxMb =
-    kindCfg?.maxFileSizeMB != null
-      ? kindCfg.maxFileSizeMB
-      : offering.maxFileSizeMB;
+  const maxMb = kindCfg?.maxFileSizeMB != null
+    ? kindCfg.maxFileSizeMB
+    : offering.maxFileSizeMB;
   const maxBytes = maxMb * 1024 * 1024;
 
   if (size > 0 && size > maxBytes) {
@@ -46,28 +43,18 @@ export function assertAllowedUpload(opts: {
   return { mediaKind };
 }
 
-/** Multer fileFilter — use on the existing `upload` instance in process.ts */
 export function multerMediaFilter(
   _req: Request,
   file: Express.Multer.File,
   cb: (error: Error | null, acceptFile?: boolean) => void
 ) {
-  try {
-    if (!isMimeAllowed(file.mimetype, file.originalname)) {
-      return cb(
-        new Error('Only enabled media types are allowed (video, image).')
-      );
-    }
-    cb(null, true);
-  } catch (e: any) {
-    cb(e);
+  if (!isMimeAllowed(file.mimetype, file.originalname)) {
+    return cb(new Error('Only enabled media types are allowed (video, image).'));
   }
+  cb(null, true);
 }
 
-/**
- * Express middleware AFTER upload.single('video').
- * Checks MIME + tier size and sets req.mediaKind.
- */
+/** After upload.single('video') — sets req.mediaKind */
 export function validateFileMiddleware(
   req: Request,
   res: Response,
@@ -76,10 +63,7 @@ export function validateFileMiddleware(
   try {
     const file = req.file;
     if (!file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No file uploaded',
-      });
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
     const user = (req as any).user as { tier?: string } | undefined;

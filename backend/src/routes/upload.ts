@@ -1,135 +1,140 @@
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
 import { optionalAuthenticate } from '../middleware/auth';
 import { r2Service } from '../services/r2Service';
 import { ProcessingJob } from '../models/ProcessingJob';
 import { videoQueue } from '../queue/videoQueue';
-import { assertAllowedUpload } from '../middleware/validateFile';
-import { resolveMediaKind, type MediaKind } from '../config/mediaKinds';
+import { sanitizeFilename } from '../utils/sanitizer';
 import type { UserTier } from '../config/tiers';
-
-type Authed = Request & {
-  user?: { id?: string; _id?: string; tier?: string };
-};
+import path from 'path';
+import fs from 'fs';
+import { UPLOAD_TEMP_DIR } from '../config/constants';
+import { resolveMediaKind, isMimeAllowed, type MediaKind } from '../config/mediaKinds';
 
 const router = Router();
 
-router.post('/presign', optionalAuthenticate, async (req: Authed, res: Response) => {
+router.post('/presign', optionalAuthenticate, async (req, res) => {
   try {
-    const { filename, contentType } = req.body || {};
-    if (!filename || !contentType) {
-      return res.status(400).json({
+    const { filename, contentType } = req.body;
+
+    if (!filename) {
+      return res.status(400).json({ success: false, message: 'filename required' });
+    }
+
+    if (!isMimeAllowed(contentType, filename)) {
+      return res.status(415).json({
         success: false,
-        message: 'filename and contentType required',
+        message: 'Unsupported media type. Enabled: video and image.',
       });
     }
 
-    const tier = (req.user?.tier as UserTier) || 'demo';
-    assertAllowedUpload({
-      mime: contentType,
-      filename,
-      size: 0,
-      tier,
-    });
-
-    const { uploadUrl, key } = await r2Service.createPresignedUpload(
-      filename,
-      contentType
+    const result = await r2Service.createPresignedUpload(
+      sanitizeFilename(filename),
+      contentType || 'application/octet-stream'
     );
 
     return res.json({
       success: true,
-      uploadUrl,
-      key,
+      uploadUrl: result.uploadUrl,
+      key: result.key,
       mediaKind: resolveMediaKind(contentType, filename),
     });
-  } catch (e: any) {
-    const status = e?.status || 500;
-    return res.status(status).json({
-      success: false,
-      message: e?.message || 'Presign failed',
-    });
+  } catch (err: any) {
+    console.error('[presign]', err);
+    return res.status(500).json({ success: false, message: err.message || 'Presign failed' });
   }
 });
 
-router.post('/complete', optionalAuthenticate, async (req: Authed, res: Response) => {
+router.post('/complete', optionalAuthenticate, async (req, res) => {
   try {
     const {
       key,
       originalFilename,
       originalSize,
+      compressedSize,
+      codec,
+      skipCompress,
       model,
       deviceProfile,
-      skipCompress,
       mimeType,
       mediaKind: bodyKind,
-    } = req.body || {};
+    } = req.body;
 
-    if (!key || !originalFilename) {
+    if (!key || !originalFilename || !originalSize) {
       return res.status(400).json({
         success: false,
-        message: 'key and originalFilename required',
+        message: 'key, originalFilename and originalSize are required',
       });
     }
 
-    const tier = (req.user?.tier as UserTier) || 'demo';
-    const userId = req.user?.id || req.user?._id || null;
-    const size = Number(originalSize) || 0;
+    if (!isMimeAllowed(mimeType, originalFilename)) {
+      return res.status(415).json({
+        success: false,
+        message: 'Unsupported media type.',
+      });
+    }
 
-    const { mediaKind: resolved } = assertAllowedUpload({
-      mime: mimeType,
-      filename: originalFilename,
-      size,
-      tier,
-    });
+    const user = (req as any).user as
+      | { id?: string; _id?: string; tier?: UserTier }
+      | undefined;
+
+    const tier = (user?.tier as UserTier) || 'demo';
+    const userId = user?.id || user?._id || null;
 
     const mediaKind: MediaKind =
-      (bodyKind as MediaKind) || resolved || resolveMediaKind(mimeType, originalFilename);
+      (bodyKind as MediaKind) || resolveMediaKind(mimeType, originalFilename);
 
     const job = await ProcessingJob.create({
       userId,
-      tier,
-      originalFilename,
-      originalSize: size,
+      originalFilename: sanitizeFilename(originalFilename),
+      originalSize: Number(originalSize),
       mediaKind,
       mimeType: mimeType || null,
-      r2Key: key,
       status: 'queued',
-      progress: 5,
-      preferredModel: model,
-      deviceProfile,
+      progress: 0,
+      tier,
+      r2Key: key,
     });
 
-    const bull = await videoQueue.add(
+    const localPath = path.join(
+      UPLOAD_TEMP_DIR,
+      `${Date.now()}-${sanitizeFilename(originalFilename)}`
+    );
+    fs.mkdirSync(UPLOAD_TEMP_DIR, { recursive: true });
+
+    await r2Service.downloadToLocal(key, localPath);
+
+    await videoQueue.add(
       'process',
       {
         jobId: String(job._id),
-        originalSize: size,
+        filePath: localPath,
+        originalFilename,
+        originalSize: Number(originalSize),
+        compressedSize: compressedSize ? Number(compressedSize) : undefined,
+        codec: codec || undefined,
+        skipCompress: Boolean(skipCompress),
         userId: userId ? String(userId) : null,
         tier,
-        preferredModel: model,
-        deviceProfile,
+        preferredModel: model ? String(model) : undefined,
+        deviceProfile: deviceProfile || {},
         r2Key: key,
-        skipCompress: Boolean(skipCompress),
         mediaKind,
         mimeType,
-        originalFilename,
       },
-      { removeOnComplete: 100, removeOnFail: 50, priority: 5 }
+      { removeOnComplete: 100, removeOnFail: 50 }
     );
-
-    job.bullJobId = String(bull.id);
-    await job.save();
 
     return res.json({
       success: true,
       jobId: job._id,
+      status: 'queued',
       mediaKind,
     });
-  } catch (e: any) {
-    const status = e?.status || 500;
-    return res.status(status).json({
+  } catch (err: any) {
+    console.error('[upload/complete]', err);
+    return res.status(500).json({
       success: false,
-      message: e?.message || 'Complete failed',
+      message: err.message || 'Failed to start processing',
     });
   }
 });
