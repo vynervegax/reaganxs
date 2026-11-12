@@ -9,7 +9,7 @@ const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // ≥ 1000 MB
 
 const VP9_TIMEOUT_MS = 8 * 60 * 1000;
 const VP9_TIMEOUT_LARGE_MS = 12 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 18 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // was 18 min — raised for 1.5 GB+ sources
 
 const SKIP_AV1_MB = 500;   // ≥500 MB → skip AV1, go straight to fast VP9
 const LARGE_MB = 500;
@@ -47,11 +47,10 @@ function vp9TimeoutFor(mb: number): number {
 function av1PresetFor(mb: number): string {
   if (mb >= HUGE_MB) return '13';
   if (mb >= LARGE_MB) return '12';
-  return '10'; // was 8
+  return '10';
 }
 
 function av1CrfFor(mb: number): string {
-  // 32–34 is still perceptually close for web; more savings
   if (mb >= HUGE_MB) return '34';
   if (mb >= LARGE_MB) return '33';
   return '32';
@@ -115,13 +114,15 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
-    // Optional light downscale for very large files (keeps perceptual quality, big speed win)
+    // More aggressive scale on large/huge inputs for speed
     const scale =
-      mb >= HUGE_MB
-        ? ['-vf', 'scale=min(1920\\,iw):-2']
-        : mb >= LARGE_MB
-          ? ['-vf', 'scale=min(1280\\,iw):-2']
-          : [];
+      mb >= 1500
+        ? ['-vf', 'scale=min(1280\\,iw):-2']
+        : mb >= HUGE_MB
+          ? ['-vf', 'scale=min(1600\\,iw):-2']
+          : mb >= LARGE_MB
+            ? ['-vf', 'scale=min(1920\\,iw):-2']
+            : [];
 
     if (!skipAv1) {
       try {
