@@ -277,7 +277,7 @@ export const videoWorker = new Worker<VideoJobData>(
         return;
       }
 
-      // ========== VIDEO PATH ==========
+      // ========== VIDEO PATH (unchanged successful flow) ==========
       let compressedSize = 0;
 
       const canResumeRestore =
@@ -389,68 +389,70 @@ export const videoWorker = new Worker<VideoJobData>(
 
       let modelUsed: string = COMPRESSION_ONLY;
       let restoreSkippedReason: string | null = decision.reason || null;
-      const model = decision.model || 'web-enhance';
+      const model = decision.model;
 
-      // Option B: always try light full enhance, accept only if size-safe
-      await ProcessingJob.findByIdAndUpdate(jobId, {
-        status: 'restoring',
-        progress: 55,
-      });
+      if (model) {
+        await ProcessingJob.findByIdAndUpdate(jobId, {
+          status: 'restoring',
+          progress: 55,
+        });
 
-      let fullAccepted = false;
-      try {
-        const fullPath = await restorationService.restore(
-          compressedPath,
-          model,
-          { maxWidth: tier === 'demo' ? 960 : 1920 }
-        );
-        temps.push(fullPath);
-        const fullSize = sizeOf(fullPath);
-
-        if (fullSize > 0 && fullSize <= originalSize) {
-          processedPath = fullPath;
-          modelUsed = model;
-          didRestore = true;
-          restoreMode = 'full';
-          restoreSkippedReason = null;
-          fullAccepted = true;
-        } else {
-          restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial`;
-          safeUnlink(fullPath);
-        }
-      } catch (e: any) {
-        restoreSkippedReason = e?.message || 'Full restore time budget — partial';
-        console.warn('[worker] full → partial:', restoreSkippedReason);
-      }
-
-      if (!fullAccepted) {
+        let fullAccepted = false;
         try {
-          const partial = await runPartialRestore({
+          const fullPath = await restorationService.restore(
             compressedPath,
             model,
-            partialOpts,
-            temps,
-            originalSize,
-          });
-          previewFrameUrls = partial.previewFrameUrls;
-          previewClipUrl = null;
-          sampleKeys = partial.sampleKeys;
-          r2KeysOnFail.push(...sampleKeys);
-          processedPath = compressedPath;
-          modelUsed = `${model}-partial`;
-          didRestore = true;
-          restoreMode = 'partial-frames';
+            { maxWidth: tier === 'demo' ? 960 : 1920 }
+          );
+          temps.push(fullPath);
+          const fullSize = sizeOf(fullPath);
+
+          if (fullSize > 0 && fullSize <= originalSize) {
+            processedPath = fullPath;
+            modelUsed = model;
+            didRestore = true;
+            restoreMode = 'full';
+            restoreSkippedReason = null;
+            fullAccepted = true;
+          } else {
+            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial`;
+            safeUnlink(fullPath);
+          }
+        } catch (e: any) {
           restoreSkippedReason =
-            (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-            `Partial OK (${partial.frameCount})`;
-        } catch (pfErr: any) {
-          processedPath = compressedPath;
-          modelUsed = COMPRESSION_ONLY;
-          didRestore = false;
-          restoreMode = 'none';
-          restoreSkippedReason =
-            (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-            (pfErr?.message || 'Partial failed');
+            e?.message || 'Full restore time budget — partial';
+          console.warn('[worker] full → partial:', restoreSkippedReason);
+        }
+
+        if (!fullAccepted) {
+          try {
+            const partial = await runPartialRestore({
+              compressedPath,
+              model,
+              partialOpts,
+              temps,
+              originalSize,
+            });
+            previewFrameUrls = partial.previewFrameUrls;
+            previewClipUrl = null;
+            sampleKeys = partial.sampleKeys;
+            r2KeysOnFail.push(...sampleKeys);
+            processedPath = compressedPath;
+            modelUsed = `${model}-partial`;
+            didRestore = true;
+            restoreMode = 'partial-frames';
+            restoreSkippedReason =
+              (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
+              `Partial OK (${partial.frameCount})`;
+          } catch (pfErr: any) {
+            processedPath = compressedPath;
+            modelUsed = COMPRESSION_ONLY;
+            didRestore = false;
+            restoreMode = 'none';
+            restoreSkippedReason =
+              (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
+              (pfErr?.message || 'Partial failed');
+          }
         }
       }
 
