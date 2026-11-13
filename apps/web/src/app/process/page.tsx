@@ -130,19 +130,21 @@ export default function ProcessPage() {
         }
 
         if (j.status === 'completed' && j.finalUrl) {
-          handleUploadComplete({
-            url: j.finalUrl,
-            savingsPercent: j.savingsPercent ?? 0,
-            modelUsed: j.modelUsed,
-            didRestore: Boolean(j.didRestore ?? j.restored),
-            restored: Boolean(j.restored ?? j.didRestore),
-            originalSize: j.originalSize,
-            finalSize: j.finalSize,
-            codec: j.codec,
-            vmafScore: j.vmafScore,
-          });
-          return;
-        }
+  handleUploadComplete({
+    url: j.finalUrl,
+    savingsPercent: j.savingsPercent ?? 0,
+    modelUsed: j.modelUsed,
+    didRestore: Boolean(j.didRestore ?? j.restored),
+    restored: Boolean(j.restored ?? j.didRestore),
+    originalSize: j.originalSize,
+    finalSize: j.finalSize,
+    codec: j.codec,
+    vmafScore: j.vmafScore,
+    completedAt: j.completedAt || j.updatedAt || j.createdAt,
+    createdAt: j.createdAt,
+  });
+  return;
+}
 
         if (j.status === 'failed' || j.status === 'cancelled') {
           setWatchingJobId(null);
