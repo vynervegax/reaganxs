@@ -17,7 +17,10 @@ type Job = {
   previewFrames?: string[];
   crf?: number | string;
   preset?: number | string;
-  expiresAt?: string | Date | null;
+  // New optional timing fields
+  processedAt?: string | Date | null;
+  startedAt?: string | Date | null;
+  finishedAt?: string | Date | null;
   tier?: string;
 };
 
@@ -28,14 +31,29 @@ function formatBytes(n?: number) {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function expiryShort(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
-  if (expiresAt) {
-    try {
-      const hours = Math.round((new Date(expiresAt).getTime() - Date.now()) / 36e5);
-      if (hours > 0 && hours < 96) return `${hours}h`;
-    } catch { /* ignore */ }
+function formatDate(d?: string | Date | null) {
+  if (!d) return '—';
+  try {
+    return new Date(d).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return '—';
   }
-  return isLoggedIn ? '48h' : '6h';
+}
+
+function formatTime(d?: string | Date | null) {
+  if (!d) return '—';
+  try {
+    return new Date(d).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
 }
 
 function SavingsDonut({ percent }: { percent: number }) {
@@ -193,6 +211,19 @@ export default function SavingsCard({
     }
   };
 
+  // Build the fact items dynamically
+  const facts: { label: string; value: string }[] = [
+    { label: 'COMPRESSION', value: compressLine },
+    { label: 'MODEL', value: restored ? label : 'None' },
+    { label: 'DATE', value: formatDate(job.processedAt) },
+    { label: 'START', value: formatTime(job.startedAt) },
+    { label: 'STOP', value: formatTime(job.finishedAt) },
+  ];
+
+  if (vmaf != null) {
+    facts.push({ label: 'VMAF', value: vmaf.toFixed(1) });
+  }
+
   return (
     <div className="space-y-3">
       <div
@@ -257,14 +288,9 @@ export default function SavingsCard({
           </div>
         </div>
 
-        {/* Facts */}
+        {/* Facts grid — 2 columns, wraps naturally */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[
-            { label: 'COMPRESSION', value: compressLine },
-            { label: 'MODEL', value: restored ? label : 'None' },
-            { label: 'VMAF', value: vmaf != null ? vmaf.toFixed(1) : '—' },
-            { label: 'EXPIRES', value: expiryShort(job.expiresAt, isLoggedIn) },
-          ].map((item) => (
+          {facts.map((item) => (
             <div
               key={item.label}
               style={{
