@@ -148,93 +148,117 @@ export default function SavingsCard({
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Header */}
-        <div className="text-center mb-6">
-          <p className="text-2xl font-bold tracking-tight" style={{ color: '#f97316' }}>
+        {/* Prominent brand header */}
+        <div className="text-center mb-5">
+          <p
+            className="text-3xl font-bold tracking-tight"
+            style={{
+              background: 'linear-gradient(90deg, #f97316, #c084fc)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+            }}
+          >
             ReaganXS
           </p>
-          <p className="text-sm text-white/50 mt-1">Bandwidth Savings</p>
+          <p className="text-sm text-white/50 mt-1">Bandwidth Savings Report</p>
         </div>
 
-        {/* Big circular percentage */}
+        {/* Gradient donut */}
         <div className="flex justify-center mb-6">
           <div
             className="relative flex items-center justify-center"
             style={{
-              width: 140,
-              height: 140,
+              width: 150,
+              height: 150,
               borderRadius: '50%',
-              background: `conic-gradient(#f97316 ${savings * 3.6}deg, #c084fc ${savings * 3.6}deg)`,
+              background: `conic-gradient(from 180deg, #f97316 0deg, #fb923c ${savings * 1.8}deg, #c084fc ${savings * 3.6}deg, #3f3f46 ${savings * 3.6}deg)`,
             }}
           >
             <div
               className="flex flex-col items-center justify-center bg-[#1c140f]"
-              style={{ width: 108, height: 108, borderRadius: '50%' }}
+              style={{ width: 116, height: 116, borderRadius: '50%' }}
             >
-              <span className="text-3xl font-bold" style={{ color: '#f97316' }}>
+              <span
+                className="text-4xl font-bold"
+                style={{
+                  background: 'linear-gradient(90deg, #f97316, #c084fc)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                }}
+              >
                 {Math.round(savings)}%
               </span>
-              <span className="text-[10px] text-white/50 mt-0.5">saved</span>
+              <span className="text-[11px] text-white/50 mt-0.5">saved</span>
             </div>
           </div>
         </div>
 
-        {/* Size comparison bars */}
-        <div className="space-y-3 mb-6">
+        {/* Size comparison bars with gradients */}
+        <div className="space-y-3.5 mb-6">
           <div>
-            <div className="flex justify-between text-xs text-white/50 mb-1">
+            <div className="flex justify-between text-xs text-white/50 mb-1.5">
               <span>Original</span>
               <span>{formatBytes(orig)}</span>
             </div>
-            <div className="h-3 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-3.5 rounded-full bg-white/10 overflow-hidden">
               <div
                 className="h-full rounded-full"
-                style={{ width: `${origPct}%`, background: '#c084fc' }}
+                style={{
+                  width: `${origPct}%`,
+                  background: 'linear-gradient(90deg, #a855f7, #c084fc)',
+                }}
               />
             </div>
           </div>
           <div>
-            <div className="flex justify-between text-xs text-white/50 mb-1">
+            <div className="flex justify-between text-xs text-white/50 mb-1.5">
               <span>After ReaganXS</span>
               <span>{formatBytes(fin)}</span>
             </div>
-            <div className="h-3 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-3.5 rounded-full bg-white/10 overflow-hidden">
               <div
                 className="h-full rounded-full"
-                style={{ width: `${finPct}%`, background: '#f97316' }}
+                style={{
+                  width: `${finPct}%`,
+                  background: 'linear-gradient(90deg, #f97316, #fb923c)',
+                }}
               />
             </div>
           </div>
         </div>
 
-        {/* Key facts grid */}
+        {/* Facts — full wrapping, no truncation */}
         <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
-            <p className="text-[10px] text-white/40">Compression</p>
-            <p className="text-white/90 mt-0.5 text-xs">{compressLine}</p>
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wide">Compression</p>
+            <p className="text-white/90 mt-1 text-xs leading-snug break-words">
+              {compressLine}
+            </p>
           </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
-            <p className="text-[10px] text-white/40">Model</p>
-            <p className="text-white/90 mt-0.5 text-xs truncate">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wide">Model</p>
+            <p className="text-white/90 mt-1 text-xs leading-snug break-words">
               {restored ? label : 'None'}
             </p>
           </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
-            <p className="text-[10px] text-white/40">VMAF</p>
-            <p className="text-white/90 mt-0.5">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wide">VMAF</p>
+            <p className="text-white/90 mt-1">
               {vmaf != null ? vmaf.toFixed(1) : '—'}
             </p>
           </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
-            <p className="text-[10px] text-white/40">Expires</p>
-            <p className="text-white/90 mt-0.5">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wide">Expires</p>
+            <p className="text-white/90 mt-1">
               {expiryShort(job.expiresAt, isLoggedIn)}
             </p>
           </div>
         </div>
 
         {restored && (
-          <p className="text-center text-xs text-emerald-400 mt-4">
+          <p className="text-center text-xs text-emerald-400 mt-5">
             {job.restoreMode === 'partial-frames'
               ? `Partial restore · ${frames.length} frames`
               : 'Restored'}
