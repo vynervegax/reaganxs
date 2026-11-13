@@ -39,8 +39,8 @@ function expiryShort(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
 }
 
 function SavingsDonut({ percent }: { percent: number }) {
-  const size = 150;
-  const stroke = 14;
+  const size = 160;
+  const stroke = 16;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ - (percent / 100) * circ;
@@ -54,7 +54,6 @@ function SavingsDonut({ percent }: { percent: number }) {
             <stop offset="100%" stopColor="#c084fc" />
           </linearGradient>
         </defs>
-        {/* Track */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -63,7 +62,6 @@ function SavingsDonut({ percent }: { percent: number }) {
           stroke="#3f3f46"
           strokeWidth={stroke}
         />
-        {/* Progress */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -77,11 +75,16 @@ function SavingsDonut({ percent }: { percent: number }) {
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-4xl font-bold" style={{ color: '#f97316' }}>
+      <div
+        className="absolute inset-0 flex flex-col items-center justify-center"
+        style={{ fontFamily: 'system-ui, sans-serif' }}
+      >
+        <span style={{ fontSize: 42, fontWeight: 700, color: '#f97316', lineHeight: 1 }}>
           {Math.round(percent)}%
         </span>
-        <span className="text-[11px] text-white/50 mt-0.5">saved</span>
+        <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 4 }}>
+          saved
+        </span>
       </div>
     </div>
   );
@@ -194,50 +197,59 @@ export default function SavingsCard({
     <div className="space-y-3">
       <div
         ref={cardRef}
-        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
-        style={{ fontFamily: 'system-ui, sans-serif' }}
+        className="rounded-3xl border border-white/10 bg-[#1c140f] text-white"
+        style={{
+          fontFamily: 'system-ui, sans-serif',
+          padding: 28,
+          maxWidth: 520,
+          margin: '0 auto',
+        }}
       >
-        {/* Brand — two-tone solid colours that export cleanly */}
-        <div className="text-center mb-5">
-          <p className="text-3xl font-bold tracking-tight">
+        {/* Brand */}
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <p style={{ fontSize: 32, fontWeight: 700, letterSpacing: -0.5, margin: 0 }}>
             <span style={{ color: '#f97316' }}>Reagan</span>
             <span style={{ color: '#c084fc' }}>XS</span>
           </p>
-          <p className="text-sm text-white/50 mt-1">Bandwidth Savings Report</p>
+          <p style={{ fontSize: 15, color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
+            Bandwidth Savings Report
+          </p>
         </div>
 
-        {/* SVG donut — matches the conic look and exports properly */}
-        <div className="flex justify-center mb-6">
+        {/* Donut */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
           <SavingsDonut percent={savings} />
         </div>
 
-        {/* Size bars */}
-        <div className="space-y-3.5 mb-6">
-          <div>
-            <div className="flex justify-between text-xs text-white/50 mb-1.5">
+        {/* Bars */}
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
               <span>Original</span>
               <span>{formatBytes(orig)}</span>
             </div>
-            <div className="h-3.5 rounded-full bg-white/10 overflow-hidden">
+            <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
               <div
-                className="h-full rounded-full"
                 style={{
                   width: `${origPct}%`,
+                  height: '100%',
+                  borderRadius: 999,
                   background: 'linear-gradient(90deg, #a855f7, #c084fc)',
                 }}
               />
             </div>
           </div>
           <div>
-            <div className="flex justify-between text-xs text-white/50 mb-1.5">
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
               <span>After ReaganXS</span>
               <span>{formatBytes(fin)}</span>
             </div>
-            <div className="h-3.5 rounded-full bg-white/10 overflow-hidden">
+            <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
               <div
-                className="h-full rounded-full"
                 style={{
                   width: `${finPct}%`,
+                  height: '100%',
+                  borderRadius: 999,
                   background: 'linear-gradient(90deg, #f97316, #fb923c)',
                 }}
               />
@@ -246,35 +258,34 @@ export default function SavingsCard({
         </div>
 
         {/* Facts */}
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
-            <p className="text-[10px] text-white/40 uppercase tracking-wide">Compression</p>
-            <p className="text-white/90 mt-1 text-xs leading-snug break-words">
-              {compressLine}
-            </p>
-          </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
-            <p className="text-[10px] text-white/40 uppercase tracking-wide">Model</p>
-            <p className="text-white/90 mt-1 text-xs leading-snug break-words">
-              {restored ? label : 'None'}
-            </p>
-          </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
-            <p className="text-[10px] text-white/40 uppercase tracking-wide">VMAF</p>
-            <p className="text-white/90 mt-1">
-              {vmaf != null ? vmaf.toFixed(1) : '—'}
-            </p>
-          </div>
-          <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
-            <p className="text-[10px] text-white/40 uppercase tracking-wide">Expires</p>
-            <p className="text-white/90 mt-1">
-              {expiryShort(job.expiresAt, isLoggedIn)}
-            </p>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {[
+            { label: 'COMPRESSION', value: compressLine },
+            { label: 'MODEL', value: restored ? label : 'None' },
+            { label: 'VMAF', value: vmaf != null ? vmaf.toFixed(1) : '—' },
+            { label: 'EXPIRES', value: expiryShort(job.expiresAt, isLoggedIn) },
+          ].map((item) => (
+            <div
+              key={item.label}
+              style={{
+                borderRadius: 12,
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                padding: '14px 16px',
+              }}
+            >
+              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', letterSpacing: 0.5, margin: 0 }}>
+                {item.label}
+              </p>
+              <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.9)', margin: '6px 0 0', lineHeight: 1.35, wordBreak: 'break-word' }}>
+                {item.value}
+              </p>
+            </div>
+          ))}
         </div>
 
         {restored && (
-          <p className="text-center text-xs text-emerald-400 mt-5">
+          <p style={{ textAlign: 'center', fontSize: 13, color: '#34d399', marginTop: 20 }}>
             {job.restoreMode === 'partial-frames'
               ? `Partial restore · ${frames.length} frames`
               : 'Restored'}
@@ -282,14 +293,14 @@ export default function SavingsCard({
         )}
 
         {job.restoreMode === 'partial-frames' && frames.length > 0 && (
-          <div className="flex justify-center gap-2 mt-3">
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
             {frames.slice(0, 3).map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={src}
                 src={src}
                 alt=""
-                className="h-14 w-auto rounded-lg border border-white/10 object-cover"
+                style={{ height: 56, width: 'auto', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', objectFit: 'cover' }}
                 crossOrigin="anonymous"
               />
             ))}
