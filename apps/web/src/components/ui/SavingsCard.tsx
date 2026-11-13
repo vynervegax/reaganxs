@@ -134,8 +134,8 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  // Prefer completedAt, then createdAt, then now
-  const stamp = job.completedAt || job.createdAt || new Date();
+  // Real job timestamp only — never "now"
+  const stamp = job.completedAt || job.createdAt;
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
