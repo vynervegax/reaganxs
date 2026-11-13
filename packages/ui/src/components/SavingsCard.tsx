@@ -8,6 +8,7 @@ interface SavingsCardProps {
   codec?: string;
   originalSizeMb: number;
   finalSizeMb: number;
+  restoredWith?: string; // e.g. "Real Web Photo ATD"
 }
 
 type ShareFormat = 'png' | 'jpeg';
@@ -19,9 +20,9 @@ export default function SavingsCard({
   codec = 'libsvtav1',
   originalSizeMb,
   finalSizeMb,
+  restoredWith,
 }: SavingsCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
 
   const formatMb = (mb: number) => `${mb.toFixed(1)} MB`;
@@ -31,9 +32,10 @@ export default function SavingsCard({
 
     const html2canvas = (await import('html2canvas')).default;
     const canvas = await html2canvas(cardRef.current, {
-      backgroundColor: null,
+      backgroundColor: '#1a1614',
       scale: 2,
       useCORS: true,
+      logging: false,
     });
 
     const mime = format === 'png' ? 'image/png' : 'image/jpeg';
@@ -49,13 +51,30 @@ export default function SavingsCard({
     return new File([blob], `reaganxs-results.${ext}`, { type: mime });
   };
 
-  const shareOrDownload = async (format: ShareFormat) => {
+  const downloadCard = async (format: ShareFormat) => {
     setSharing(true);
-    setMenuOpen(false);
-
     try {
       const file = await captureCard(format);
-      if (!file) throw new Error('Could not create image');
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download card failed', err);
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const shareCard = async () => {
+    setSharing(true);
+    try {
+      const file = await captureCard('png');
+      if (!file) return;
 
       const shareData = {
         files: [file],
@@ -66,13 +85,7 @@ export default function SavingsCard({
       if (navigator.canShare?.(shareData)) {
         await navigator.share(shareData);
       } else {
-        // Fallback: download so user can upload manually to IG / LinkedIn
-        const url = URL.createObjectURL(file);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name;
-        a.click();
-        URL.revokeObjectURL(url);
+        await downloadCard('png');
       }
     } catch (err) {
       console.error('Share failed', err);
@@ -82,102 +95,83 @@ export default function SavingsCard({
   };
 
   return (
-    <div className="w-full max-w-sm mx-auto relative">
-      {/* Shareable card */}
+    <div className="w-full">
+      {/* Shareable card — wide horizontal layout matching summary */}
       <div
         ref={cardRef}
-        className="bg-[#1a1614] rounded-2xl p-5 text-white shadow-xl border border-white/10"
+        className="bg-[#1a1614] rounded-2xl p-6 text-white border border-white/10"
       >
-        {/* Header */}
+        {/* Header row */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 flex items-center justify-center border border-amber-500/40">
-              <span className="text-amber-200 font-bold text-lg tracking-tight">RS</span>
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-800 to-amber-950 flex items-center justify-center border border-amber-600/40">
+              <span className="text-amber-200 font-bold text-sm tracking-tight">RS</span>
             </div>
-            <div>
-              <div className="text-xl font-bold bg-gradient-to-r from-orange-500 to-purple-500 bg-clip-text text-transparent">
-                ReaganXS
-              </div>
-              <div className="text-xs text-gray-400 -mt-0.5">Results</div>
-            </div>
+            <div className="w-24 h-6 rounded bg-gradient-to-r from-orange-500 to-purple-500" />
+            <div className="text-xs text-gray-400">Results</div>
           </div>
           <span className="text-xs text-gray-500">Account</span>
         </div>
 
-        {/* Main metrics */}
-        <div className="flex items-end justify-between mb-5">
+        {/* Metrics row */}
+        <div className="grid grid-cols-3 gap-6 mb-4">
           <div>
             <div className="text-sm text-gray-400 mb-1">Bandwidth saved</div>
-            <div className="text-5xl font-bold text-orange-500 leading-none">
+            <div className="text-4xl font-bold text-orange-500 leading-none">
               {bandwidthSavedPercent}%
             </div>
           </div>
-          <div className="text-right">
+          <div>
             <div className="text-sm text-gray-400 mb-1">VMAF</div>
-            <div className="text-lg font-medium">
+            <div className="text-lg font-medium text-gray-300">
               {vmaf != null ? vmaf.toFixed(1) : 'Not measured'}
             </div>
           </div>
+          <div>
+            <div className="text-sm text-gray-400 mb-1">Model</div>
+            <div className="text-lg font-semibold">{modelName}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{codec}</div>
+          </div>
         </div>
-
-        <div className="h-px bg-white/10 my-4" />
-
-        {/* Model */}
-        <div className="mb-4">
-          <div className="text-sm text-gray-400 mb-1">Model</div>
-          <div className="text-lg font-semibold">{modelName}</div>
-          <div className="text-xs text-gray-500 mt-0.5">{codec}</div>
-        </div>
-
-        <div className="h-px bg-white/10 my-4" />
 
         {/* Size */}
-        <div className="text-lg font-semibold tracking-wide">
+        <div className="text-sm text-gray-300 mb-4">
           {formatMb(originalSizeMb)} → {formatMb(finalSizeMb)}
         </div>
-      </div>
 
-      {/* Share button + menu */}
-      <div className="mt-4 relative">
-        <button
-          onClick={() => setMenuOpen((v) => !v)}
-          disabled={sharing}
-          className="w-full py-3 px-4 rounded-xl bg-white/10 hover:bg-white/15 active:bg-white/20 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
-        >
-          {sharing ? 'Preparing…' : 'Share Results'}
-          <svg
-            className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
+        <div className="h-px bg-white/10 mb-3" />
 
-        {menuOpen && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 bg-[#2a2420] border border-white/10 rounded-xl overflow-hidden shadow-lg z-10">
-            <button
-              onClick={() => shareOrDownload('png')}
-              className="w-full px-4 py-3 text-left text-sm hover:bg-white/10 flex items-center justify-between"
-            >
-              <span>Share as PNG</span>
-              <span className="text-xs text-gray-400">Best quality</span>
-            </button>
-            <div className="h-px bg-white/10" />
-            <button
-              onClick={() => shareOrDownload('jpeg')}
-              className="w-full px-4 py-3 text-left text-sm hover:bg-white/10 flex items-center justify-between"
-            >
-              <span>Share as JPEG</span>
-              <span className="text-xs text-gray-400">Smaller file</span>
-            </button>
-            <div className="h-px bg-white/10" />
-            <div className="px-4 py-2 text-xs text-gray-500">
-              Opens share sheet (Instagram, LinkedIn, etc.) or downloads the image
-            </div>
+        {/* Restoration line */}
+        {restoredWith && (
+          <div className="text-sm text-emerald-400 font-medium">
+            Restored with {restoredWith}
           </div>
         )}
+      </div>
+
+      {/* Action buttons */}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          onClick={shareCard}
+          disabled={sharing}
+          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
+        >
+          {sharing ? 'Preparing…' : 'Share result'}
+        </button>
+        <button
+          onClick={() => downloadCard('png')}
+          disabled={sharing}
+          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
+        >
+          Download card PNG
+        </button>
+        <button
+          onClick={() => downloadCard('jpeg')}
+          disabled={sharing}
+          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
+        >
+          Download card JPG
+        </button>
       </div>
     </div>
   );

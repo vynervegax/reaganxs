@@ -3,21 +3,17 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 20 * 60 * 1000;
-const AV1_TIMEOUT_LARGE_MS = 30 * 60 * 1000;
-const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;
+const AV1_TIMEOUT_MS = 20 * 60 * 1000;           // < 500 MB
+const AV1_TIMEOUT_LARGE_MS = 30 * 60 * 1000;     // 500–1000 MB
+const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // ≥ 1000 MB
 
 const VP9_TIMEOUT_MS = 8 * 60 * 1000;
 const VP9_TIMEOUT_LARGE_MS = 12 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // was 18 min — raised for 1.5 GB+ sources
 
-const SKIP_AV1_MB = 500;
+const SKIP_AV1_MB = 500;   // ≥500 MB → skip AV1, go straight to fast VP9
 const LARGE_MB = 500;
 const HUGE_MB = 1000;
-
-// Mild denoise + sharpen — only applied on high-savings encodes
-const MILD_DENOISE_SHARPEN = 'hqdn3d=2:1:4:2,cas=0.4';
-const FAST_UNSHARP = 'unsharp=3:3:0.5:3:3:0.0';
 
 function inputMb(inputPath: string): number {
   try {
@@ -47,6 +43,7 @@ function vp9TimeoutFor(mb: number): number {
   return VP9_TIMEOUT_MS;
 }
 
+/** Faster presets + slightly higher CRF for web speed/size */
 function av1PresetFor(mb: number): string {
   if (mb >= HUGE_MB) return '13';
   if (mb >= LARGE_MB) return '12';
@@ -57,14 +54,6 @@ function av1CrfFor(mb: number): string {
   if (mb >= HUGE_MB) return '34';
   if (mb >= LARGE_MB) return '33';
   return '32';
-}
-
-/** Rough estimate: high CRF + downscale tends to produce >80% savings */
-function expectHighSavings(mb: number, crf: string): boolean {
-  const crfNum = parseInt(crf, 10);
-  if (crfNum >= 33) return true;
-  if (mb >= LARGE_MB && crfNum >= 32) return true;
-  return false;
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -114,11 +103,8 @@ export const compressionService = {
     const av1Crf = av1CrfFor(mb);
     const skipAv1 = mb >= SKIP_AV1_MB;
 
-    const highSavings = expectHighSavings(mb, av1Crf);
-    const enhanceFilter = highSavings ? MILD_DENOISE_SHARPEN : null;
-
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} skipAv1=${skipAv1} highSavings=${highSavings} enhance=${!!enhanceFilter}`
+      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s preset=${av1Preset} crf=${av1Crf}`
     );
 
     const audio = [
@@ -128,7 +114,7 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
-    // Scale for large files
+    // More aggressive scale on large/huge inputs for speed
     const scale =
       mb >= 1500
         ? ['-vf', 'scale=min(1280\\,iw):-2']
@@ -137,16 +123,6 @@ export const compressionService = {
           : mb >= LARGE_MB
             ? ['-vf', 'scale=min(1920\\,iw):-2']
             : [];
-
-    // Build video filter chain: scale (if any) + optional mild denoise/sharpen
-    const vfParts: string[] = [];
-    if (scale.length) {
-      vfParts.push(scale[1]); // the filter string
-    }
-    if (enhanceFilter) {
-      vfParts.push(enhanceFilter);
-    }
-    const vf = vfParts.length ? ['-vf', vfParts.join(',')] : [];
 
     if (!skipAv1) {
       try {
@@ -162,7 +138,7 @@ export const compressionService = {
             '-pix_fmt', 'yuv420p',
             '-svtav1-params', 'lp=1:tune=0',
             '-threads', '2',
-            ...vf,
+            ...scale,
             ...audio,
             '-movflags', '+faststart',
             '-sn',
@@ -185,16 +161,9 @@ export const compressionService = {
       console.log('[compress] skip AV1 (large file) → VP9');
     }
 
-    // Fast VP9 path
+    // Fast VP9 fallback (or primary for large files)
     const cpuUsed = mb >= HUGE_MB ? '8' : mb >= LARGE_MB ? '7' : '6';
     const vp9Crf = mb >= HUGE_MB ? '34' : mb >= LARGE_MB ? '33' : '32';
-    const vp9HighSavings = expectHighSavings(mb, vp9Crf);
-    const vp9Enhance = vp9HighSavings ? MILD_DENOISE_SHARPEN : null;
-
-    const vp9VfParts: string[] = [];
-    if (scale.length) vp9VfParts.push(scale[1]);
-    if (vp9Enhance) vp9VfParts.push(vp9Enhance);
-    const vp9Vf = vp9VfParts.length ? ['-vf', vp9VfParts.join(',')] : [];
 
     await run(
       [
@@ -210,7 +179,7 @@ export const compressionService = {
         '-row-mt', '1',
         '-threads', '2',
         '-pix_fmt', 'yuv420p',
-        ...vp9Vf,
+        ...scale,
         ...audio,
         '-sn',
         vp9,
