@@ -148,46 +148,31 @@ export default function SavingsCard({
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Prominent brand header */}
+        {/* Brand — solid colours so html2canvas captures them cleanly */}
         <div className="text-center mb-5">
-          <p
-            className="text-3xl font-bold tracking-tight"
-            style={{
-              background: 'linear-gradient(90deg, #f97316, #c084fc)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}
-          >
-            ReaganXS
+          <p className="text-3xl font-bold tracking-tight">
+            <span style={{ color: '#f97316' }}>Reagan</span>
+            <span style={{ color: '#c084fc' }}>XS</span>
           </p>
           <p className="text-sm text-white/50 mt-1">Bandwidth Savings Report</p>
         </div>
 
-        {/* Gradient donut */}
+        {/* Percentage — large solid number (no conic-gradient) */}
         <div className="flex justify-center mb-6">
           <div
-            className="relative flex items-center justify-center"
+            className="flex flex-col items-center justify-center rounded-full"
             style={{
-              width: 150,
-              height: 150,
-              borderRadius: '50%',
-              background: `conic-gradient(from 180deg, #f97316 0deg, #fb923c ${savings * 1.8}deg, #c084fc ${savings * 3.6}deg, #3f3f46 ${savings * 3.6}deg)`,
+              width: 140,
+              height: 140,
+              background: 'linear-gradient(135deg, #f97316 0%, #c084fc 100%)',
+              padding: 4,
             }}
           >
             <div
-              className="flex flex-col items-center justify-center bg-[#1c140f]"
-              style={{ width: 116, height: 116, borderRadius: '50%' }}
+              className="flex flex-col items-center justify-center bg-[#1c140f] rounded-full"
+              style={{ width: '100%', height: '100%' }}
             >
-              <span
-                className="text-4xl font-bold"
-                style={{
-                  background: 'linear-gradient(90deg, #f97316, #c084fc)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
-                }}
-              >
+              <span className="text-4xl font-bold" style={{ color: '#f97316' }}>
                 {Math.round(savings)}%
               </span>
               <span className="text-[11px] text-white/50 mt-0.5">saved</span>
@@ -195,7 +180,7 @@ export default function SavingsCard({
           </div>
         </div>
 
-        {/* Size comparison bars with gradients */}
+        {/* Size comparison bars (these already export well) */}
         <div className="space-y-3.5 mb-6">
           <div>
             <div className="flex justify-between text-xs text-white/50 mb-1.5">
@@ -229,7 +214,7 @@ export default function SavingsCard({
           </div>
         </div>
 
-        {/* Facts — full wrapping, no truncation */}
+        {/* Facts */}
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3">
             <p className="text-[10px] text-white/40 uppercase tracking-wide">Compression</p>
