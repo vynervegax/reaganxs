@@ -38,6 +38,55 @@ function expiryShort(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
   return isLoggedIn ? '48h' : '6h';
 }
 
+function SavingsDonut({ percent }: { percent: number }) {
+  const size = 150;
+  const stroke = 14;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (percent / 100) * circ;
+
+  return (
+    <div className="relative" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <defs>
+          <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#f97316" />
+            <stop offset="100%" stopColor="#c084fc" />
+          </linearGradient>
+        </defs>
+        {/* Track */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="#3f3f46"
+          strokeWidth={stroke}
+        />
+        {/* Progress */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="url(#donutGrad)"
+          strokeWidth={stroke}
+          strokeDasharray={circ}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-4xl font-bold" style={{ color: '#f97316' }}>
+          {Math.round(percent)}%
+        </span>
+        <span className="text-[11px] text-white/50 mt-0.5">saved</span>
+      </div>
+    </div>
+  );
+}
+
 export default function SavingsCard({
   job,
   isLoggedIn,
@@ -148,7 +197,7 @@ export default function SavingsCard({
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Brand — solid colours so html2canvas captures them cleanly */}
+        {/* Brand — two-tone solid colours that export cleanly */}
         <div className="text-center mb-5">
           <p className="text-3xl font-bold tracking-tight">
             <span style={{ color: '#f97316' }}>Reagan</span>
@@ -157,30 +206,12 @@ export default function SavingsCard({
           <p className="text-sm text-white/50 mt-1">Bandwidth Savings Report</p>
         </div>
 
-        {/* Percentage — large solid number (no conic-gradient) */}
+        {/* SVG donut — matches the conic look and exports properly */}
         <div className="flex justify-center mb-6">
-          <div
-            className="flex flex-col items-center justify-center rounded-full"
-            style={{
-              width: 140,
-              height: 140,
-              background: 'linear-gradient(135deg, #f97316 0%, #c084fc 100%)',
-              padding: 4,
-            }}
-          >
-            <div
-              className="flex flex-col items-center justify-center bg-[#1c140f] rounded-full"
-              style={{ width: '100%', height: '100%' }}
-            >
-              <span className="text-4xl font-bold" style={{ color: '#f97316' }}>
-                {Math.round(savings)}%
-              </span>
-              <span className="text-[11px] text-white/50 mt-0.5">saved</span>
-            </div>
-          </div>
+          <SavingsDonut percent={savings} />
         </div>
 
-        {/* Size comparison bars (these already export well) */}
+        {/* Size bars */}
         <div className="space-y-3.5 mb-6">
           <div>
             <div className="flex justify-between text-xs text-white/50 mb-1.5">
