@@ -21,6 +21,7 @@ type Job = {
   tier?: string;
   createdAt?: string | Date | null;
   completedAt?: string | Date | null;
+  startedAt?: string | Date | null;
 };
 
 function formatBytes(n?: number) {
@@ -30,12 +31,13 @@ function formatBytes(n?: number) {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
+// Matches header style: 27/10/2026
 function formatDate(d?: string | Date | null) {
   if (!d) return '—';
   try {
     return new Date(d).toLocaleDateString('en-GB', {
       day: '2-digit',
-      month: 'short',
+      month: '2-digit',
       year: 'numeric',
     });
   } catch {
@@ -43,6 +45,7 @@ function formatDate(d?: string | Date | null) {
   }
 }
 
+// Matches header style: 13:39:58
 function formatTime(d?: string | Date | null) {
   if (!d) return '—';
   try {
@@ -144,8 +147,8 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  // Single source of truth — same field the job list uses
-  const stamp = job.completedAt || job.createdAt || null;
+  // Prefer the same timestamp the header uses (completedAt / createdAt / startedAt)
+  const stamp = job.completedAt || job.createdAt || job.startedAt || null;
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
