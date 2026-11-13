@@ -1,178 +1,184 @@
 // package/ui/src/components/SavingsCard.tsx
-import React, { useRef, useState } from 'react';
+import { useRef, useEffect } from 'react';
 
 interface SavingsCardProps {
-  bandwidthSavedPercent: number;
-  vmaf?: number | null;
-  modelName: string;
+  originalSize: number;      // bytes
+  finalSize: number;         // bytes
+  savingsPercent: number;
+  modelUsed?: string;
   codec?: string;
-  originalSizeMb: number;
-  finalSizeMb: number;
-  restoredWith?: string; // e.g. "Real Web Photo ATD"
+  vmafScore?: number | null;
+  restored: boolean;
+  mediaKind?: string;
+  tier?: string;
+  jobId?: string;
+  onDownload?: (dataUrl: string) => void;
 }
 
-type ShareFormat = 'png' | 'jpeg';
-
-export default function SavingsCard({
-  bandwidthSavedPercent,
-  vmaf,
-  modelName,
-  codec = 'libsvtav1',
-  originalSizeMb,
-  finalSizeMb,
-  restoredWith,
+export function SavingsCard({
+  originalSize,
+  finalSize,
+  savingsPercent,
+  modelUsed,
+  codec,
+  vmafScore,
+  restored,
+  mediaKind = 'video',
+  tier = 'free',
+  jobId,
+  onDownload,
 }: SavingsCardProps) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [sharing, setSharing] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const formatMb = (mb: number) => `${mb.toFixed(1)} MB`;
+  const formatSize = (bytes: number) => {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
 
-  const captureCard = async (format: ShareFormat): Promise<File | null> => {
-    if (!cardRef.current) return null;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-    const html2canvas = (await import('html2canvas')).default;
-    const canvas = await html2canvas(cardRef.current, {
-      backgroundColor: '#1a1614',
-      scale: 2,
-      useCORS: true,
-      logging: false,
-    });
+    const W = 800;
+    const H = 520;
+    canvas.width = W;
+    canvas.height = H;
 
-    const mime = format === 'png' ? 'image/png' : 'image/jpeg';
-    const quality = format === 'jpeg' ? 0.92 : undefined;
+    // Background
+    ctx.fillStyle = '#1a1614';
+    ctx.fillRect(0, 0, W, H);
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, mime, quality)
+    // Subtle border
+    ctx.strokeStyle = '#2a2420';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, W - 2, H - 2);
+
+    // Header
+    ctx.fillStyle = '#f97316';
+    ctx.font = 'bold 28px system-ui, sans-serif';
+    ctx.fillText('ReaganXS', 32, 48);
+
+    ctx.fillStyle = '#a8a29e';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillText('Results', 32, 72);
+
+    // Tier badge
+    ctx.fillStyle = '#3f3a36';
+    ctx.beginPath();
+    ctx.roundRect(W - 140, 28, 108, 28, 14);
+    ctx.fill();
+    ctx.fillStyle = '#c4b5a0';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(tier.toUpperCase(), W - 86, 46);
+    ctx.textAlign = 'left';
+
+    // Main savings
+    ctx.fillStyle = '#f97316';
+    ctx.font = 'bold 72px system-ui, sans-serif';
+    ctx.fillText(`${Math.round(savingsPercent)}%`, 32, 180);
+
+    ctx.fillStyle = '#a8a29e';
+    ctx.font = '16px system-ui, sans-serif';
+    ctx.fillText('Bandwidth saved', 32, 210);
+
+    ctx.fillStyle = '#d6d3d1';
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillText(
+      `${formatSize(originalSize)} → ${formatSize(finalSize)}`,
+      32,
+      236
     );
 
-    if (!blob) return null;
+    // Pipeline section
+    const pipeY = 280;
+    ctx.fillStyle = '#292524';
+    ctx.beginPath();
+    ctx.roundRect(24, pipeY, W - 48, 140, 12);
+    ctx.fill();
 
-    const ext = format === 'png' ? 'png' : 'jpg';
-    return new File([blob], `reaganxs-results.${ext}`, { type: mime });
-  };
+    ctx.fillStyle = '#fafaf9';
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.fillText('Processing Pipeline', 40, pipeY + 28);
 
-  const downloadCard = async (format: ShareFormat) => {
-    setSharing(true);
-    try {
-      const file = await captureCard(format);
-      if (!file) return;
+    const steps = [
+      { n: '1', title: 'Aggressive Compression', sub: codec ? codec.toUpperCase() : 'SVT-AV1' },
+      { n: '2', title: restored ? 'Smart Routing + Restoration' : 'Smart Routing', sub: restored ? (modelUsed || 'Restored') : 'Compressed only' },
+      { n: '3', title: 'Ready for download', sub: mediaKind === 'image' ? 'Image' : 'Video' },
+    ];
 
-      const url = URL.createObjectURL(file);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Download card failed', err);
-    } finally {
-      setSharing(false);
+    steps.forEach((s, i) => {
+      const y = pipeY + 58 + i * 28;
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(52, y - 4, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#1a1614';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(s.n, 52, y);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#fafaf9';
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.fillText(s.title, 72, y);
+      ctx.fillStyle = '#a8a29e';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(s.sub, 280, y);
+    });
+
+    // Bottom stats
+    const statsY = 450;
+    const stats = [
+      { label: 'VMAF', value: vmafScore != null ? String(Math.round(vmafScore)) : '—' },
+      { label: 'Model', value: modelUsed || (restored ? 'Restored' : '—') },
+      { label: 'Codec', value: codec || '—' },
+    ];
+
+    stats.forEach((st, i) => {
+      const x = 40 + i * 240;
+      ctx.fillStyle = '#a8a29e';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(st.label, x, statsY);
+      ctx.fillStyle = '#fafaf9';
+      ctx.font = 'bold 14px system-ui, sans-serif';
+      ctx.fillText(st.value, x, statsY + 20);
+    });
+
+    // Footer
+    if (jobId) {
+      ctx.fillStyle = '#57534e';
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.fillText(`Job ${jobId.slice(-8)}`, 32, H - 16);
     }
-  };
+  }, [originalSize, finalSize, savingsPercent, modelUsed, codec, vmafScore, restored, mediaKind, tier, jobId]);
 
-  const shareCard = async () => {
-    setSharing(true);
-    try {
-      const file = await captureCard('png');
-      if (!file) return;
-
-      const shareData = {
-        files: [file],
-        title: 'ReaganXS Results',
-        text: `Saved ${bandwidthSavedPercent}% bandwidth with ReaganXS`,
-      };
-
-      if (navigator.canShare?.(shareData)) {
-        await navigator.share(shareData);
-      } else {
-        await downloadCard('png');
-      }
-    } catch (err) {
-      console.error('Share failed', err);
-    } finally {
-      setSharing(false);
-    }
+  const download = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const url = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reaganxs-savings-${Math.round(savingsPercent)}pct.png`;
+    a.click();
+    onDownload?.(url);
   };
 
   return (
-    <div className="w-full">
-      {/* Shareable card — wide horizontal layout matching summary */}
-      <div
-        ref={cardRef}
-        className="bg-[#1a1614] rounded-2xl p-6 text-white border border-white/10"
+    <div className="space-y-3">
+      <canvas
+        ref={canvasRef}
+        className="w-full max-w-md rounded-xl border border-stone-800"
+        style={{ imageRendering: 'auto' }}
+      />
+      <button
+        onClick={download}
+        className="px-4 py-2 text-sm rounded-lg bg-orange-600 hover:bg-orange-500 text-white"
       >
-        {/* Header row */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-800 to-amber-950 flex items-center justify-center border border-amber-600/40">
-              <span className="text-amber-200 font-bold text-sm tracking-tight">RS</span>
-            </div>
-            <div className="w-24 h-6 rounded bg-gradient-to-r from-orange-500 to-purple-500" />
-            <div className="text-xs text-gray-400">Results</div>
-          </div>
-          <span className="text-xs text-gray-500">Account</span>
-        </div>
-
-        {/* Metrics row */}
-        <div className="grid grid-cols-3 gap-6 mb-4">
-          <div>
-            <div className="text-sm text-gray-400 mb-1">Bandwidth saved</div>
-            <div className="text-4xl font-bold text-orange-500 leading-none">
-              {bandwidthSavedPercent}%
-            </div>
-          </div>
-          <div>
-            <div className="text-sm text-gray-400 mb-1">VMAF</div>
-            <div className="text-lg font-medium text-gray-300">
-              {vmaf != null ? vmaf.toFixed(1) : 'Not measured'}
-            </div>
-          </div>
-          <div>
-            <div className="text-sm text-gray-400 mb-1">Model</div>
-            <div className="text-lg font-semibold">{modelName}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{codec}</div>
-          </div>
-        </div>
-
-        {/* Size */}
-        <div className="text-sm text-gray-300 mb-4">
-          {formatMb(originalSizeMb)} → {formatMb(finalSizeMb)}
-        </div>
-
-        <div className="h-px bg-white/10 mb-3" />
-
-        {/* Restoration line */}
-        {restoredWith && (
-          <div className="text-sm text-emerald-400 font-medium">
-            Restored with {restoredWith}
-          </div>
-        )}
-      </div>
-
-      {/* Action buttons */}
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          onClick={shareCard}
-          disabled={sharing}
-          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
-        >
-          {sharing ? 'Preparing…' : 'Share result'}
-        </button>
-        <button
-          onClick={() => downloadCard('png')}
-          disabled={sharing}
-          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
-        >
-          Download card PNG
-        </button>
-        <button
-          onClick={() => downloadCard('jpeg')}
-          disabled={sharing}
-          className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-sm font-medium transition-colors disabled:opacity-60"
-        >
-          Download card JPG
-        </button>
-      </div>
+        Download savings card
+      </button>
     </div>
   );
 }
