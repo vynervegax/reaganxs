@@ -19,10 +19,8 @@ type Job = {
   preset?: number | string;
   expiresAt?: string | Date | null;
   tier?: string;
-  // Optional timing fields
   createdAt?: string | Date | null;
   completedAt?: string | Date | null;
-  durationMs?: number | null;
 };
 
 function formatBytes(n?: number) {
@@ -35,7 +33,7 @@ function formatBytes(n?: number) {
 function formatDate(d?: string | Date | null) {
   if (!d) return '—';
   try {
-    return new Date(d).toLocaleDateString(undefined, {
+    return new Date(d).toLocaleDateString('en-GB', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
@@ -48,22 +46,15 @@ function formatDate(d?: string | Date | null) {
 function formatTime(d?: string | Date | null) {
   if (!d) return '—';
   try {
-    return new Date(d).toLocaleTimeString(undefined, {
+    return new Date(d).toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
     });
   } catch {
     return '—';
   }
-}
-
-function formatDuration(ms?: number | null) {
-  if (ms == null || ms <= 0) return '—';
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
 }
 
 function SavingsDonut({ percent }: { percent: number }) {
@@ -153,8 +144,8 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  // Prefer completedAt, then createdAt, then now
-  const stamp = job.completedAt || job.createdAt || new Date();
+  // Single source of truth — same field the job list uses
+  const stamp = job.completedAt || job.createdAt || null;
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
@@ -229,7 +220,6 @@ export default function SavingsCard({
     { label: 'MODEL', value: restored ? label : 'None' },
     { label: 'DATE', value: formatDate(stamp) },
     { label: 'TIME', value: formatTime(stamp) },
-    { label: 'TIME NEEDED', value: formatDuration(job.durationMs) },
     ...(vmaf != null ? [{ label: 'VMAF', value: vmaf.toFixed(1) }] : []),
   ];
 
