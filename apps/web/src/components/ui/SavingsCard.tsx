@@ -1,5 +1,3 @@
-app/web/src/components/ui/SavingsCard
-
 'use client';
 
 import { useRef, useState } from 'react';
@@ -36,16 +34,18 @@ function formatBytes(n?: number) {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function expiryLabel(expiresAt?: string | Date | null) {
-  if (!expiresAt) return '48 hours';
-  try {
-    const d = new Date(expiresAt);
-    const hours = Math.round((d.getTime() - Date.now()) / 36e5);
-    if (hours > 0 && hours < 96) return `${hours} hours`;
-    return d.toLocaleDateString();
-  } catch {
-    return '48 hours';
+function expiryLabel(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
+  if (expiresAt) {
+    try {
+      const d = new Date(expiresAt);
+      const hours = Math.round((d.getTime() - Date.now()) / 36e5);
+      if (hours > 0 && hours < 96) return `${hours} hours`;
+      return d.toLocaleDateString();
+    } catch {
+      /* fall through */
+    }
   }
+  return isLoggedIn ? '48 hours' : '6 hours';
 }
 
 export default function SavingsCard({
@@ -73,8 +73,8 @@ export default function SavingsCard({
 
   const compressSub = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
-    job.crf != null ? `CRF ${job.crf}` : null,
-    job.preset != null ? `Preset ${job.preset}` : null,
+    job.crf != null ? `CRF ${job.crf}` : 'CRF 28',
+    job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ]
     .filter(Boolean)
     .join(' • ');
@@ -150,9 +150,10 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
+      {/* Captured card — visually matches ProcessPipeline */}
       <div
         ref={cardRef}
-        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-5 text-white"
+        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-6 text-white"
       >
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -180,78 +181,60 @@ export default function SavingsCard({
           </div>
           <span className="text-xs text-white/40">
             {isLoggedIn ? 'Account' : 'Demo'}
-            {job.tier ? ` · ${job.tier.toUpperCase()}` : ''}
+            {job.tier ? ` · ${String(job.tier).toUpperCase()}` : ''}
           </span>
         </div>
 
-        {/* Pipeline (matches post-processing summary) */}
-        <div className="rounded-2xl bg-[#292524] p-5 space-y-4">
-          <div className="text-center">
-            <p className="text-base font-semibold">Processing Pipeline</p>
-            <p className="text-xs text-white/45 mt-0.5">
-              {job.tier ? `${job.tier} Tier` : isLoggedIn ? 'Account' : 'Demo'} ·{' '}
-              {restored ? 'Full Pipeline' : 'Compression only'}
+        {/* Pipeline block — same structure as ProcessPipeline */}
+        <div className="backdrop-blur-2xl bg-white/5 border border-white/10 rounded-3xl p-8">
+          <div className="text-center mb-6">
+            <h3 className="text-2xl font-semibold mb-2">Processing Pipeline</h3>
+            <p className="text-gray-400">
+              {isLoggedIn
+                ? `${job.tier ? String(job.tier).charAt(0).toUpperCase() + String(job.tier).slice(1) : 'Premium'} Tier • Full Pipeline`
+                : 'Demo Mode • Limited Pipeline'}
             </p>
           </div>
 
-          <div className="space-y-3.5">
-            <div className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
+          <div className="space-y-6">
+            <div className="flex items-center gap-4">
+              <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
                 1
-              </span>
-              <div>
-                <p className="text-sm font-medium">Aggressive Compression (SVT-AV1)</p>
-                <p className="text-xs text-white/45">{compressSub}</p>
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">Aggressive Compression (SVT-AV1)</p>
+                <p className="text-sm text-gray-400">{compressSub}</p>
               </div>
             </div>
 
-            <div className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
-                2
-              </span>
-              <div>
-                <p className="text-sm font-medium">
-                  {restored ? 'Smart Routing + Restoration' : 'Smart Routing'}
-                </p>
-                <p className="text-xs text-white/45">
-                  {restored ? label : 'Compressed only'}
-                </p>
+            {(isLoggedIn || restored) && (
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
+                  2
+                </div>
+                <div className="flex-1">
+                  <p className="font-medium">Smart Routing + Restoration</p>
+                  <p className="text-sm text-gray-400">{label}</p>
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
-                3
-              </span>
-              <div>
-                <p className="text-sm font-medium">Upload to Cloudflare R2</p>
-                <p className="text-xs text-white/45">{expiryLabel(job.expiresAt)} expiry</p>
+            <div className="flex items-center gap-4">
+              <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
+                {isLoggedIn || restored ? '3' : '2'}
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">Upload to Cloudflare R2</p>
+                <p className="text-sm text-gray-400">
+                  {expiryLabel(job.expiresAt, isLoggedIn)} expiry
+                </p>
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Restoration status */}
-        <div className="rounded-2xl bg-[#292524]/60 px-4 py-3 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-white/45">Restoration</p>
-            <p className="text-sm font-medium mt-0.5">
-              {restored ? label : 'None'}
-            </p>
-          </div>
-          <span
-            className={`text-xs px-3 py-1 rounded-full border ${
-              restored
-                ? 'border-emerald-500/40 text-emerald-300'
-                : 'border-white/15 text-white/40'
-            }`}
-          >
-            {restored ? 'Restored' : 'Skipped'}
-          </span>
         </div>
 
         {/* Metrics */}
-        <div className="grid grid-cols-3 gap-4 pt-1">
+        <div className="grid grid-cols-3 gap-4">
           <div>
             <p className="text-xs text-white/40 mb-1">Bandwidth saved</p>
             <p className="text-3xl font-bold text-[#f97316]">{savings}%</p>
