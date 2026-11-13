@@ -17,11 +17,12 @@ type Job = {
   previewFrames?: string[];
   crf?: number | string;
   preset?: number | string;
-  // New optional timing fields
-  processedAt?: string | Date | null;
-  startedAt?: string | Date | null;
-  finishedAt?: string | Date | null;
+  expiresAt?: string | Date | null;
   tier?: string;
+  // Optional timing fields
+  createdAt?: string | Date | null;
+  completedAt?: string | Date | null;
+  durationMs?: number | null;
 };
 
 function formatBytes(n?: number) {
@@ -35,9 +36,9 @@ function formatDate(d?: string | Date | null) {
   if (!d) return '—';
   try {
     return new Date(d).toLocaleDateString(undefined, {
-      year: 'numeric',
+      day: '2-digit',
       month: 'short',
-      day: 'numeric',
+      year: 'numeric',
     });
   } catch {
     return '—';
@@ -54,6 +55,15 @@ function formatTime(d?: string | Date | null) {
   } catch {
     return '—';
   }
+}
+
+function formatDuration(ms?: number | null) {
+  if (ms == null || ms <= 0) return '—';
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
 }
 
 function SavingsDonut({ percent }: { percent: number }) {
@@ -143,6 +153,9 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
+  // Prefer completedAt, then createdAt, then now
+  const stamp = job.completedAt || job.createdAt || new Date();
+
   const shareText = [
     `ReaganXS · saved ${savings}%`,
     vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
@@ -211,18 +224,14 @@ export default function SavingsCard({
     }
   };
 
-  // Build the fact items dynamically
-  const facts: { label: string; value: string }[] = [
+  const facts = [
     { label: 'COMPRESSION', value: compressLine },
     { label: 'MODEL', value: restored ? label : 'None' },
-    { label: 'DATE', value: formatDate(job.processedAt) },
-    { label: 'START', value: formatTime(job.startedAt) },
-    { label: 'STOP', value: formatTime(job.finishedAt) },
+    { label: 'DATE', value: formatDate(stamp) },
+    { label: 'TIME', value: formatTime(stamp) },
+    { label: 'TIME NEEDED', value: formatDuration(job.durationMs) },
+    ...(vmaf != null ? [{ label: 'VMAF', value: vmaf.toFixed(1) }] : []),
   ];
-
-  if (vmaf != null) {
-    facts.push({ label: 'VMAF', value: vmaf.toFixed(1) });
-  }
 
   return (
     <div className="space-y-3">
@@ -288,7 +297,7 @@ export default function SavingsCard({
           </div>
         </div>
 
-        {/* Facts grid — 2 columns, wraps naturally */}
+        {/* Facts */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {facts.map((item) => (
             <div
