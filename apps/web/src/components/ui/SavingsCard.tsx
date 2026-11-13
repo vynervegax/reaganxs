@@ -53,13 +53,19 @@ export default function SavingsCard({
 
   const model = job.modelUsed || 'compression-only';
   const label = MODEL_LABELS[model] || model;
-  const savings = job.savingsPercent ?? 0;
+  const savings = Math.min(100, Math.max(0, job.savingsPercent ?? 0));
   const restored = Boolean(job.restored ?? job.didRestore);
   const vmaf =
     typeof job.vmafScore === 'number' && !Number.isNaN(job.vmafScore)
       ? job.vmafScore
       : null;
   const frames = job.previewFrames || [];
+
+  const orig = job.originalSize || 0;
+  const fin = job.finalSize || 0;
+  const maxSize = Math.max(orig, fin, 1);
+  const origPct = (orig / maxSize) * 100;
+  const finPct = (fin / maxSize) * 100;
 
   const compressLine = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
@@ -137,66 +143,98 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
-      {/* Captured card */}
       <div
         ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Header — text only (avoids broken logo image) */}
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <p className="text-xl font-bold tracking-tight" style={{ color: '#f97316' }}>
-              ReaganXS
-            </p>
-            <p className="text-[11px] text-white/40 mt-0.5">Bandwidth savings</p>
-          </div>
-          <span className="text-xs text-white/40">
-            {isLoggedIn ? 'Account' : 'Demo'}
-          </span>
-        </div>
-
-        {/* Big savings */}
-        <div className="mb-4">
-          <p className="text-5xl font-bold leading-none" style={{ color: '#f97316' }}>
-            {savings}%
+        {/* Header */}
+        <div className="text-center mb-6">
+          <p className="text-2xl font-bold tracking-tight" style={{ color: '#f97316' }}>
+            ReaganXS
           </p>
-          <p className="text-sm text-white/50 mt-1">bandwidth saved</p>
-          {(job.originalSize || job.finalSize) && (
-            <p className="text-sm text-white/70 mt-2">
-              {formatBytes(job.originalSize)} → {formatBytes(job.finalSize)}
-            </p>
-          )}
+          <p className="text-sm text-white/50 mt-1">Bandwidth Savings</p>
         </div>
 
-        {/* Clean key facts */}
-        <div className="rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 space-y-2 text-sm">
-          <div className="flex justify-between gap-4">
-            <span className="text-white/50">Compression</span>
-            <span className="text-white/90 text-right">{compressLine}</span>
+        {/* Big circular percentage */}
+        <div className="flex justify-center mb-6">
+          <div
+            className="relative flex items-center justify-center"
+            style={{
+              width: 140,
+              height: 140,
+              borderRadius: '50%',
+              background: `conic-gradient(#f97316 ${savings * 3.6}deg, #c084fc ${savings * 3.6}deg)`,
+            }}
+          >
+            <div
+              className="flex flex-col items-center justify-center bg-[#1c140f]"
+              style={{ width: 108, height: 108, borderRadius: '50%' }}
+            >
+              <span className="text-3xl font-bold" style={{ color: '#f97316' }}>
+                {Math.round(savings)}%
+              </span>
+              <span className="text-[10px] text-white/50 mt-0.5">saved</span>
+            </div>
           </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-white/50">Model</span>
-            <span className="text-white/90 text-right max-w-[220px] truncate">
+        </div>
+
+        {/* Size comparison bars */}
+        <div className="space-y-3 mb-6">
+          <div>
+            <div className="flex justify-between text-xs text-white/50 mb-1">
+              <span>Original</span>
+              <span>{formatBytes(orig)}</span>
+            </div>
+            <div className="h-3 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${origPct}%`, background: '#c084fc' }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-white/50 mb-1">
+              <span>After ReaganXS</span>
+              <span>{formatBytes(fin)}</span>
+            </div>
+            <div className="h-3 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${finPct}%`, background: '#f97316' }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Key facts grid */}
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
+            <p className="text-[10px] text-white/40">Compression</p>
+            <p className="text-white/90 mt-0.5 text-xs">{compressLine}</p>
+          </div>
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
+            <p className="text-[10px] text-white/40">Model</p>
+            <p className="text-white/90 mt-0.5 text-xs truncate">
               {restored ? label : 'None'}
-            </span>
+            </p>
           </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-white/50">VMAF</span>
-            <span className="text-white/90">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
+            <p className="text-[10px] text-white/40">VMAF</p>
+            <p className="text-white/90 mt-0.5">
               {vmaf != null ? vmaf.toFixed(1) : '—'}
-            </span>
+            </p>
           </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-white/50">Expires</span>
-            <span className="text-white/90">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5">
+            <p className="text-[10px] text-white/40">Expires</p>
+            <p className="text-white/90 mt-0.5">
               {expiryShort(job.expiresAt, isLoggedIn)}
-            </span>
+            </p>
           </div>
         </div>
 
         {restored && (
-          <p className="text-xs text-emerald-400 mt-4">
+          <p className="text-center text-xs text-emerald-400 mt-4">
             {job.restoreMode === 'partial-frames'
               ? `Partial restore · ${frames.length} frames`
               : 'Restored'}
@@ -204,14 +242,14 @@ export default function SavingsCard({
         )}
 
         {job.restoreMode === 'partial-frames' && frames.length > 0 && (
-          <div className="flex gap-2 mt-3">
+          <div className="flex justify-center gap-2 mt-3">
             {frames.slice(0, 3).map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={src}
                 src={src}
                 alt=""
-                className="h-16 w-auto rounded-lg border border-white/10 object-cover"
+                className="h-14 w-auto rounded-lg border border-white/10 object-cover"
                 crossOrigin="anonymous"
               />
             ))}
