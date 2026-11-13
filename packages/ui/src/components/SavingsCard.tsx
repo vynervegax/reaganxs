@@ -1,5 +1,4 @@
 // package/ui/src/components/SavingsCard.tsx
-// package/ui/src/components/SavingsCard.tsx
 import { useRef, useEffect } from 'react';
 
 interface SavingsCardProps {

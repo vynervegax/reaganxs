@@ -71,7 +71,7 @@ export default function SavingsCard({
       : null;
   const frames = job.previewFrames || [];
 
-  const compressDetail = [
+  const compressSub = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
     job.crf != null ? `CRF ${job.crf}` : null,
     job.preset != null ? `Preset ${job.preset}` : null,
@@ -131,18 +131,13 @@ export default function SavingsCard({
         useCORS: true,
         allowTaint: false,
         logging: false,
-        imageTimeout: 5000,
+        imageTimeout: 8000,
       });
       const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-      const dataUrl = canvas.toDataURL(
-        mime,
-        format === 'jpeg' ? 0.92 : undefined
-      );
+      const dataUrl = canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined);
       const a = document.createElement('a');
       a.href = dataUrl;
-      a.download = `reaganxs-savings-${Date.now()}.${
-        format === 'jpeg' ? 'jpg' : 'png'
-      }`;
+      a.download = `reaganxs-savings-${Date.now()}.${format === 'jpeg' ? 'jpg' : 'png'}`;
       a.click();
       setShareMsg(`Card saved as ${format.toUpperCase()}`);
     } catch (e: any) {
@@ -160,67 +155,118 @@ export default function SavingsCard({
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-5 text-white"
       >
         {/* Header */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.png"
-              alt="ReaganXS"
+              alt=""
               width={36}
               height={36}
-              className="h-9 w-9 rounded-lg object-contain shrink-0"
+              className="h-9 w-9 rounded-lg object-contain"
               crossOrigin="anonymous"
               onError={(e) => {
-                const t = e.currentTarget;
-                t.style.display = 'none';
-                const fallback = t.nextElementSibling as HTMLElement | null;
-                if (fallback) fallback.style.display = 'flex';
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
               }}
             />
-            <div
-              className="hidden h-9 w-9 rounded-lg bg-gradient-to-br from-[#f97316] to-[#c084fc] items-center justify-center text-black text-[10px] font-bold shrink-0"
-              aria-hidden
-            >
-              RX
-            </div>
-            <div className="min-w-0">
+            <div>
               <h3 className="text-lg font-semibold leading-tight">
                 <span className="bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text text-transparent">
                   ReaganXS
                 </span>
               </h3>
-              <p className="text-[11px] text-white/40 truncate">Results</p>
+              <p className="text-[11px] text-white/40">Results</p>
             </div>
           </div>
-          <span className="text-xs text-white/40 shrink-0">
+          <span className="text-xs text-white/40">
             {isLoggedIn ? 'Account' : 'Demo'}
-            {job.tier ? ` · ${job.tier}` : ''}
+            {job.tier ? ` · ${job.tier.toUpperCase()}` : ''}
           </span>
         </div>
 
-        {/* Main metrics */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        {/* Pipeline (matches post-processing summary) */}
+        <div className="rounded-2xl bg-[#292524] p-5 space-y-4">
+          <div className="text-center">
+            <p className="text-base font-semibold">Processing Pipeline</p>
+            <p className="text-xs text-white/45 mt-0.5">
+              {job.tier ? `${job.tier} Tier` : isLoggedIn ? 'Account' : 'Demo'} ·{' '}
+              {restored ? 'Full Pipeline' : 'Compression only'}
+            </p>
+          </div>
+
+          <div className="space-y-3.5">
+            <div className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
+                1
+              </span>
+              <div>
+                <p className="text-sm font-medium">Aggressive Compression (SVT-AV1)</p>
+                <p className="text-xs text-white/45">{compressSub}</p>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
+                2
+              </span>
+              <div>
+                <p className="text-sm font-medium">
+                  {restored ? 'Smart Routing + Restoration' : 'Smart Routing'}
+                </p>
+                <p className="text-xs text-white/45">
+                  {restored ? label : 'Compressed only'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-black">
+                3
+              </span>
+              <div>
+                <p className="text-sm font-medium">Upload to Cloudflare R2</p>
+                <p className="text-xs text-white/45">{expiryLabel(job.expiresAt)} expiry</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Restoration status */}
+        <div className="rounded-2xl bg-[#292524]/60 px-4 py-3 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-white/45">Restoration</p>
+            <p className="text-sm font-medium mt-0.5">
+              {restored ? label : 'None'}
+            </p>
+          </div>
+          <span
+            className={`text-xs px-3 py-1 rounded-full border ${
+              restored
+                ? 'border-emerald-500/40 text-emerald-300'
+                : 'border-white/15 text-white/40'
+            }`}
+          >
+            {restored ? 'Restored' : 'Skipped'}
+          </span>
+        </div>
+
+        {/* Metrics */}
+        <div className="grid grid-cols-3 gap-4 pt-1">
           <div>
             <p className="text-xs text-white/40 mb-1">Bandwidth saved</p>
             <p className="text-3xl font-bold text-[#f97316]">{savings}%</p>
           </div>
           <div>
             <p className="text-xs text-white/40 mb-1">VMAF</p>
-            {vmaf != null ? (
-              <p className="text-3xl font-bold text-[#c084fc]">
-                {vmaf.toFixed(2)}
-              </p>
-            ) : (
-              <p className="text-sm text-white/40 pt-2">
-                {isLoggedIn ? 'Not measured' : 'Premium metric'}
-              </p>
-            )}
+            <p className="text-sm text-white/70 pt-2">
+              {vmaf != null ? vmaf.toFixed(2) : 'Not measured'}
+            </p>
           </div>
-          <div className="col-span-2 sm:col-span-1">
+          <div>
             <p className="text-xs text-white/40 mb-1">Model</p>
-            <p className="font-medium text-sm text-white">{label}</p>
+            <p className="text-sm font-medium">{label}</p>
             {job.codec && (
-              <p className="text-[11px] text-white/35 mt-1">{job.codec}</p>
+              <p className="text-[11px] text-white/35">{job.codec}</p>
             )}
           </div>
         </div>
@@ -231,63 +277,11 @@ export default function SavingsCard({
           </p>
         )}
 
-        {/* Processing Pipeline */}
-        <div className="rounded-2xl bg-[#292524] p-4 space-y-3">
-          <p className="text-sm font-semibold text-white/90">Processing Pipeline</p>
-          <div className="space-y-2.5 text-sm">
-            <div className="flex items-start gap-3">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
-                1
-              </span>
-              <div>
-                <p className="text-white/90">Aggressive Compression</p>
-                <p className="text-[11px] text-white/45">{compressDetail}</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
-                2
-              </span>
-              <div>
-                <p className="text-white/90">
-                  {restored ? 'Smart Routing + Restoration' : 'Smart Routing'}
-                </p>
-                <p className="text-[11px] text-white/45">
-                  {restored ? label : 'Compressed only'}
-                  {job.restoreMode && job.restoreMode !== 'none'
-                    ? ` · ${job.restoreMode}`
-                    : ''}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
-                3
-              </span>
-              <div>
-                <p className="text-white/90">Upload to Cloudflare R2</p>
-                <p className="text-[11px] text-white/45">
-                  {expiryLabel(job.expiresAt)} expiry
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Status line */}
-        {restored ? (
+        {restored && (
           <p className="text-xs text-emerald-300 border-t border-white/10 pt-3">
             {job.restoreMode === 'partial-frames'
               ? `Partial frame restore · ${frames.length} samples`
               : `Restored with ${label}`}
-            {vmaf != null ? ` · VMAF ${vmaf.toFixed(2)}` : ''}
-          </p>
-        ) : (
-          <p className="text-xs text-amber-200/80 border-t border-white/10 pt-3">
-            Compression only
-            {job.restoreSkippedReason || job.reason
-              ? ` — ${job.restoreSkippedReason || job.reason}`
-              : ''}
           </p>
         )}
 
@@ -298,26 +292,16 @@ export default function SavingsCard({
               <img
                 key={src}
                 src={src}
-                alt="Restored frame"
-                className="h-24 w-auto rounded-xl border border-white/15 object-cover"
+                alt=""
+                className="h-20 w-auto rounded-xl border border-white/15 object-cover"
                 crossOrigin="anonymous"
               />
             ))}
           </div>
         )}
-
-        {job.previewClipUrl && (
-          <a
-            href={job.previewClipUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block text-sm text-[#c084fc] underline"
-          >
-            Open quality sample clip
-          </a>
-        )}
       </div>
 
+      {/* Actions (not captured) */}
       <div className="flex flex-wrap gap-3">
         {job.url && (
           <button
@@ -331,7 +315,7 @@ export default function SavingsCard({
         <button
           type="button"
           onClick={onShare}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium text-white"
+          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
         >
           Share result
         </button>
@@ -339,7 +323,7 @@ export default function SavingsCard({
           type="button"
           disabled={busy}
           onClick={() => onDownloadCardImage('png')}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium text-white disabled:opacity-50"
+          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
           {busy ? 'Exporting…' : 'Download card PNG'}
         </button>
@@ -347,7 +331,7 @@ export default function SavingsCard({
           type="button"
           disabled={busy}
           onClick={() => onDownloadCardImage('jpeg')}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium text-white disabled:opacity-50"
+          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
           Download card JPG
         </button>
