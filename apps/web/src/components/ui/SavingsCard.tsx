@@ -10,16 +10,11 @@ type Job = {
   restored?: boolean;
   didRestore?: boolean;
   restoreMode?: 'none' | 'full' | 'partial-frames' | string;
-  restoreSkippedReason?: string | null;
-  reason?: string;
   vmafScore?: number | null;
   originalSize?: number;
   finalSize?: number;
   codec?: string;
-  stages?: string[];
-  isDemo?: boolean;
   previewFrames?: string[];
-  previewClipUrl?: string | null;
   crf?: number | string;
   preset?: number | string;
   expiresAt?: string | Date | null;
@@ -28,7 +23,6 @@ type Job = {
 
 function formatBytes(n?: number) {
   if (!n || n <= 0) return '—';
-  if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
@@ -39,9 +33,7 @@ function expiryShort(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
     try {
       const hours = Math.round((new Date(expiresAt).getTime() - Date.now()) / 36e5);
       if (hours > 0 && hours < 96) return `${hours}h`;
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
   return isLoggedIn ? '48h' : '6h';
 }
@@ -69,15 +61,15 @@ export default function SavingsCard({
       : null;
   const frames = job.previewFrames || [];
 
-  const compressBits = [
+  const compressLine = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
     job.crf != null ? `CRF ${job.crf}` : 'CRF 28',
-    job.preset != null ? `P${job.preset}` : 'P6',
+    job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
-    vmaf != null ? `VMAF ${vmaf.toFixed(2)}` : null,
+    vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
     `Model: ${label}`,
     job.url ? `Download: ${job.url}` : null,
   ]
@@ -145,99 +137,81 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
-      {/* Compact captured card */}
+      {/* Captured card */}
       <div
         ref={cardRef}
-        className="rounded-2xl border border-white/10 bg-[#1c140f] p-5 space-y-4 text-white"
+        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
+        style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo.png"
-              alt=""
-              width={28}
-              height={28}
-              className="h-7 w-7 rounded-md object-contain"
-              crossOrigin="anonymous"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-              }}
-            />
-            <div>
-              <p className="text-sm font-semibold leading-none">
-                <span className="bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text text-transparent">
-                  ReaganXS
-                </span>
-              </p>
-              <p className="text-[10px] text-white/40 mt-0.5">Results</p>
-            </div>
+        {/* Header — text only (avoids broken logo image) */}
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <p className="text-xl font-bold tracking-tight" style={{ color: '#f97316' }}>
+              ReaganXS
+            </p>
+            <p className="text-[11px] text-white/40 mt-0.5">Bandwidth savings</p>
           </div>
-          <span className="text-[11px] text-white/40">
+          <span className="text-xs text-white/40">
             {isLoggedIn ? 'Account' : 'Demo'}
           </span>
         </div>
 
-        {/* Compact metrics row */}
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <p className="text-[10px] text-white/40">Saved</p>
-            <p className="text-2xl font-bold text-[#f97316] leading-tight">{savings}%</p>
-          </div>
-          <div>
-            <p className="text-[10px] text-white/40">VMAF</p>
-            <p className="text-sm text-white/80 pt-1">
-              {vmaf != null ? vmaf.toFixed(1) : '—'}
+        {/* Big savings */}
+        <div className="mb-4">
+          <p className="text-5xl font-bold leading-none" style={{ color: '#f97316' }}>
+            {savings}%
+          </p>
+          <p className="text-sm text-white/50 mt-1">bandwidth saved</p>
+          {(job.originalSize || job.finalSize) && (
+            <p className="text-sm text-white/70 mt-2">
+              {formatBytes(job.originalSize)} → {formatBytes(job.finalSize)}
             </p>
-          </div>
-          <div>
-            <p className="text-[10px] text-white/40">Model</p>
-            <p className="text-xs font-medium truncate">{label}</p>
-          </div>
+          )}
         </div>
 
-        {(job.originalSize || job.finalSize) && (
-          <p className="text-[11px] text-white/45 -mt-1">
-            {formatBytes(job.originalSize)} → {formatBytes(job.finalSize)}
-          </p>
-        )}
-
-        {/* Compact pipeline summary (one line per step) */}
-        <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3 space-y-1.5 text-[12px]">
-          <div className="flex justify-between gap-3">
-            <span className="text-white/70">Compression</span>
-            <span className="text-white/45 text-right">{compressBits}</span>
+        {/* Clean key facts */}
+        <div className="rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 space-y-2 text-sm">
+          <div className="flex justify-between gap-4">
+            <span className="text-white/50">Compression</span>
+            <span className="text-white/90 text-right">{compressLine}</span>
           </div>
-          <div className="flex justify-between gap-3">
-            <span className="text-white/70">Restore</span>
-            <span className="text-white/45 text-right truncate max-w-[180px]">
+          <div className="flex justify-between gap-4">
+            <span className="text-white/50">Model</span>
+            <span className="text-white/90 text-right max-w-[220px] truncate">
               {restored ? label : 'None'}
             </span>
           </div>
-          <div className="flex justify-between gap-3">
-            <span className="text-white/70">R2 expiry</span>
-            <span className="text-white/45">{expiryShort(job.expiresAt, isLoggedIn)}</span>
+          <div className="flex justify-between gap-4">
+            <span className="text-white/50">VMAF</span>
+            <span className="text-white/90">
+              {vmaf != null ? vmaf.toFixed(1) : '—'}
+            </span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-white/50">Expires</span>
+            <span className="text-white/90">
+              {expiryShort(job.expiresAt, isLoggedIn)}
+            </span>
           </div>
         </div>
 
         {restored && (
-          <p className="text-[11px] text-emerald-300">
+          <p className="text-xs text-emerald-400 mt-4">
             {job.restoreMode === 'partial-frames'
-              ? `Partial · ${frames.length} samples`
-              : `Restored`}
+              ? `Partial restore · ${frames.length} frames`
+              : 'Restored'}
           </p>
         )}
 
         {job.restoreMode === 'partial-frames' && frames.length > 0 && (
-          <div className="flex gap-1.5 overflow-x-auto">
+          <div className="flex gap-2 mt-3">
             {frames.slice(0, 3).map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={src}
                 src={src}
                 alt=""
-                className="h-14 w-auto rounded-lg border border-white/10 object-cover"
+                className="h-16 w-auto rounded-lg border border-white/10 object-cover"
                 crossOrigin="anonymous"
               />
             ))}
@@ -245,7 +219,7 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* Actions (not captured) */}
+      {/* Actions */}
       <div className="flex flex-wrap gap-3">
         {job.url && (
           <button
