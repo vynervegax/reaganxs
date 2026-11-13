@@ -18,10 +18,8 @@ type Job = {
   crf?: number | string;
   preset?: number | string;
   expiresAt?: string | Date | null;
-  tier?: string;
-  createdAt?: string | Date | null;
   completedAt?: string | Date | null;
-  durationMs?: number | null;
+  createdAt?: string | Date | null;
 };
 
 function formatBytes(n?: number) {
@@ -35,6 +33,7 @@ function formatTimestamp(d?: string | Date | null) {
   if (!d) return '—';
   try {
     const date = new Date(d);
+    if (Number.isNaN(date.getTime())) return '—';
     return date.toLocaleString(undefined, {
       day: '2-digit',
       month: 'short',
@@ -45,58 +44,6 @@ function formatTimestamp(d?: string | Date | null) {
   } catch {
     return '—';
   }
-}
-
-function SavingsDonut({ percent }: { percent: number }) {
-  const size = 160;
-  const stroke = 16;
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (percent / 100) * circ;
-
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <defs>
-          <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#f97316" />
-            <stop offset="100%" stopColor="#c084fc" />
-          </linearGradient>
-        </defs>
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke="#3f3f46"
-          strokeWidth={stroke}
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke="url(#donutGrad)"
-          strokeWidth={stroke}
-          strokeDasharray={circ}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </svg>
-      <div
-        className="absolute inset-0 flex flex-col items-center justify-center"
-        style={{ fontFamily: 'system-ui, sans-serif' }}
-      >
-        <span style={{ fontSize: 42, fontWeight: 700, color: '#f97316', lineHeight: 1 }}>
-          {Math.round(percent)}%
-        </span>
-        <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 4 }}>
-          saved
-        </span>
-      </div>
-    </div>
-  );
 }
 
 export default function SavingsCard({
@@ -134,17 +81,7 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  // Real job timestamp only — never "now"
   const stamp = job.completedAt || job.createdAt;
-
-  const shareText = [
-    `ReaganXS · saved ${savings}%`,
-    vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
-    `Model: ${label}`,
-    job.url ? `Download: ${job.url}` : null,
-  ]
-    .filter(Boolean)
-    .join('\n');
 
   const onDownloadVideo = () => {
     if (!job.url) return;
@@ -162,13 +99,15 @@ export default function SavingsCard({
       if (navigator.share) {
         await navigator.share({
           title: 'ReaganXS result',
-          text: shareText,
+          text: `ReaganXS · saved ${savings}%`,
           url: job.url,
         });
         setShareMsg('Shared');
         return;
       }
-      await navigator.clipboard.writeText(shareText);
+      await navigator.clipboard.writeText(
+        `ReaganXS · saved ${savings}%\n${job.url || ''}`
+      );
       setShareMsg('Copied to clipboard');
     } catch {
       setShareMsg('Share cancelled');
@@ -205,27 +144,21 @@ export default function SavingsCard({
     }
   };
 
-  const facts = [
-    { label: 'COMPRESSION', value: compressLine },
-    { label: 'MODEL', value: restored ? label : 'None' },
-    { label: 'PROCESSED', value: formatTimestamp(stamp) },
-    { label: 'SIZE', value: `${formatBytes(orig)} → ${formatBytes(fin)}` },
-    ...(vmaf != null ? [{ label: 'VMAF', value: vmaf.toFixed(1) }] : []),
-  ];
-
   return (
     <div className="space-y-3">
       <div
         ref={cardRef}
-        className="rounded-3xl border border-white/10 bg-[#1c140f] text-white"
         style={{
           fontFamily: 'system-ui, sans-serif',
+          background: '#1c140f',
+          color: 'white',
+          borderRadius: 24,
+          border: '1px solid rgba(255,255,255,0.1)',
           padding: 28,
           maxWidth: 520,
           margin: '0 auto',
         }}
       >
-        {/* Brand */}
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <p style={{ fontSize: 32, fontWeight: 700, letterSpacing: -0.5, margin: 0 }}>
             <span style={{ color: '#f97316' }}>Reagan</span>
@@ -236,12 +169,40 @@ export default function SavingsCard({
           </p>
         </div>
 
-        {/* Donut */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-          <SavingsDonut percent={savings} />
+          <div
+            style={{
+              width: 150,
+              height: 150,
+              borderRadius: '50%',
+              background: `conic-gradient(from 180deg, #f97316 0deg, #fb923c ${savings * 1.8}deg, #c084fc ${savings * 3.6}deg, #3f3f46 ${savings * 3.6}deg)`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 114,
+                height: 114,
+                borderRadius: '50%',
+                background: '#1c140f',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <span style={{ fontSize: 40, fontWeight: 700, color: '#f97316', lineHeight: 1 }}>
+                {Math.round(savings)}%
+              </span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 4 }}>
+                saved
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* Bars */}
         <div style={{ marginBottom: 28 }}>
           <div style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
@@ -249,14 +210,7 @@ export default function SavingsCard({
               <span>{formatBytes(orig)}</span>
             </div>
             <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${origPct}%`,
-                  height: '100%',
-                  borderRadius: 999,
-                  background: 'linear-gradient(90deg, #a855f7, #c084fc)',
-                }}
-              />
+              <div style={{ width: `${origPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #a855f7, #c084fc)' }} />
             </div>
           </div>
           <div>
@@ -265,21 +219,19 @@ export default function SavingsCard({
               <span>{formatBytes(fin)}</span>
             </div>
             <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${finPct}%`,
-                  height: '100%',
-                  borderRadius: 999,
-                  background: 'linear-gradient(90deg, #f97316, #fb923c)',
-                }}
-              />
+              <div style={{ width: `${finPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #f97316, #fb923c)' }} />
             </div>
           </div>
         </div>
 
-        {/* Facts */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {facts.map((item) => (
+          {[
+            { label: 'COMPRESSION', value: compressLine },
+            { label: 'MODEL', value: restored ? label : 'None' },
+            { label: 'PROCESSED', value: formatTimestamp(stamp) },
+            { label: 'SIZE', value: `${formatBytes(orig)} → ${formatBytes(fin)}` },
+            ...(vmaf != null ? [{ label: 'VMAF', value: vmaf.toFixed(1) }] : []),
+          ].map((item) => (
             <div
               key={item.label}
               style={{
@@ -306,24 +258,8 @@ export default function SavingsCard({
               : 'Restored'}
           </p>
         )}
-
-        {job.restoreMode === 'partial-frames' && frames.length > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
-            {frames.slice(0, 3).map((src) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={src}
-                src={src}
-                alt=""
-                style={{ height: 56, width: 'auto', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', objectFit: 'cover' }}
-                crossOrigin="anonymous"
-              />
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Actions */}
       <div className="flex flex-wrap gap-3">
         {job.url && (
           <button
