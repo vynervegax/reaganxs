@@ -34,18 +34,16 @@ function formatBytes(n?: number) {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function expiryLabel(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
+function expiryShort(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
   if (expiresAt) {
     try {
-      const d = new Date(expiresAt);
-      const hours = Math.round((d.getTime() - Date.now()) / 36e5);
-      if (hours > 0 && hours < 96) return `${hours} hours`;
-      return d.toLocaleDateString();
+      const hours = Math.round((new Date(expiresAt).getTime() - Date.now()) / 36e5);
+      if (hours > 0 && hours < 96) return `${hours}h`;
     } catch {
-      /* fall through */
+      /* ignore */
     }
   }
-  return isLoggedIn ? '48 hours' : '6 hours';
+  return isLoggedIn ? '48h' : '6h';
 }
 
 export default function SavingsCard({
@@ -71,19 +69,16 @@ export default function SavingsCard({
       : null;
   const frames = job.previewFrames || [];
 
-  const compressSub = [
+  const compressBits = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
     job.crf != null ? `CRF ${job.crf}` : 'CRF 28',
-    job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
-  ]
-    .filter(Boolean)
-    .join(' • ');
+    job.preset != null ? `P${job.preset}` : 'P6',
+  ].join(' · ');
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
     vmaf != null ? `VMAF ${vmaf.toFixed(2)}` : null,
     `Model: ${label}`,
-    job.restoreMode ? `Restore: ${job.restoreMode}` : null,
     job.url ? `Download: ${job.url}` : null,
   ]
     .filter(Boolean)
@@ -150,133 +145,99 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
-      {/* Captured card — visually matches ProcessPipeline */}
+      {/* Compact captured card */}
       <div
         ref={cardRef}
-        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-6 text-white"
+        className="rounded-2xl border border-white/10 bg-[#1c140f] p-5 space-y-4 text-white"
       >
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.png"
               alt=""
-              width={36}
-              height={36}
-              className="h-9 w-9 rounded-lg object-contain"
+              width={28}
+              height={28}
+              className="h-7 w-7 rounded-md object-contain"
               crossOrigin="anonymous"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.display = 'none';
               }}
             />
             <div>
-              <h3 className="text-lg font-semibold leading-tight">
+              <p className="text-sm font-semibold leading-none">
                 <span className="bg-gradient-to-r from-[#f97316] to-[#c084fc] bg-clip-text text-transparent">
                   ReaganXS
                 </span>
-              </h3>
-              <p className="text-[11px] text-white/40">Results</p>
+              </p>
+              <p className="text-[10px] text-white/40 mt-0.5">Results</p>
             </div>
           </div>
-          <span className="text-xs text-white/40">
+          <span className="text-[11px] text-white/40">
             {isLoggedIn ? 'Account' : 'Demo'}
-            {job.tier ? ` · ${String(job.tier).toUpperCase()}` : ''}
           </span>
         </div>
 
-        {/* Pipeline block — same structure as ProcessPipeline */}
-        <div className="backdrop-blur-2xl bg-white/5 border border-white/10 rounded-3xl p-8">
-          <div className="text-center mb-6">
-            <h3 className="text-2xl font-semibold mb-2">Processing Pipeline</h3>
-            <p className="text-gray-400">
-              {isLoggedIn
-                ? `${job.tier ? String(job.tier).charAt(0).toUpperCase() + String(job.tier).slice(1) : 'Premium'} Tier • Full Pipeline`
-                : 'Demo Mode • Limited Pipeline'}
-            </p>
-          </div>
-
-          <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
-                1
-              </div>
-              <div className="flex-1">
-                <p className="font-medium">Aggressive Compression (SVT-AV1)</p>
-                <p className="text-sm text-gray-400">{compressSub}</p>
-              </div>
-            </div>
-
-            {(isLoggedIn || restored) && (
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
-                  2
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium">Smart Routing + Restoration</p>
-                  <p className="text-sm text-gray-400">{label}</p>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center gap-4">
-              <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-black font-bold">
-                {isLoggedIn || restored ? '3' : '2'}
-              </div>
-              <div className="flex-1">
-                <p className="font-medium">Upload to Cloudflare R2</p>
-                <p className="text-sm text-gray-400">
-                  {expiryLabel(job.expiresAt, isLoggedIn)} expiry
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Metrics */}
-        <div className="grid grid-cols-3 gap-4">
+        {/* Compact metrics row */}
+        <div className="grid grid-cols-3 gap-3">
           <div>
-            <p className="text-xs text-white/40 mb-1">Bandwidth saved</p>
-            <p className="text-3xl font-bold text-[#f97316]">{savings}%</p>
+            <p className="text-[10px] text-white/40">Saved</p>
+            <p className="text-2xl font-bold text-[#f97316] leading-tight">{savings}%</p>
           </div>
           <div>
-            <p className="text-xs text-white/40 mb-1">VMAF</p>
-            <p className="text-sm text-white/70 pt-2">
-              {vmaf != null ? vmaf.toFixed(2) : 'Not measured'}
+            <p className="text-[10px] text-white/40">VMAF</p>
+            <p className="text-sm text-white/80 pt-1">
+              {vmaf != null ? vmaf.toFixed(1) : '—'}
             </p>
           </div>
           <div>
-            <p className="text-xs text-white/40 mb-1">Model</p>
-            <p className="text-sm font-medium">{label}</p>
-            {job.codec && (
-              <p className="text-[11px] text-white/35">{job.codec}</p>
-            )}
+            <p className="text-[10px] text-white/40">Model</p>
+            <p className="text-xs font-medium truncate">{label}</p>
           </div>
         </div>
 
         {(job.originalSize || job.finalSize) && (
-          <p className="text-xs text-white/45">
+          <p className="text-[11px] text-white/45 -mt-1">
             {formatBytes(job.originalSize)} → {formatBytes(job.finalSize)}
           </p>
         )}
 
+        {/* Compact pipeline summary (one line per step) */}
+        <div className="rounded-xl bg-white/5 border border-white/10 px-3.5 py-3 space-y-1.5 text-[12px]">
+          <div className="flex justify-between gap-3">
+            <span className="text-white/70">Compression</span>
+            <span className="text-white/45 text-right">{compressBits}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-white/70">Restore</span>
+            <span className="text-white/45 text-right truncate max-w-[180px]">
+              {restored ? label : 'None'}
+            </span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-white/70">R2 expiry</span>
+            <span className="text-white/45">{expiryShort(job.expiresAt, isLoggedIn)}</span>
+          </div>
+        </div>
+
         {restored && (
-          <p className="text-xs text-emerald-300 border-t border-white/10 pt-3">
+          <p className="text-[11px] text-emerald-300">
             {job.restoreMode === 'partial-frames'
-              ? `Partial frame restore · ${frames.length} samples`
-              : `Restored with ${label}`}
+              ? `Partial · ${frames.length} samples`
+              : `Restored`}
           </p>
         )}
 
         {job.restoreMode === 'partial-frames' && frames.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {frames.map((src) => (
+          <div className="flex gap-1.5 overflow-x-auto">
+            {frames.slice(0, 3).map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={src}
                 src={src}
                 alt=""
-                className="h-20 w-auto rounded-xl border border-white/15 object-cover"
+                className="h-14 w-auto rounded-lg border border-white/10 object-cover"
                 crossOrigin="anonymous"
               />
             ))}
