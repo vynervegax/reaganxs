@@ -1,4 +1,5 @@
 // package/ui/src/components/SavingsCard.tsx
+// package/ui/src/components/SavingsCard.tsx
 import { useRef, useEffect } from 'react';
 
 interface SavingsCardProps {
@@ -7,11 +8,14 @@ interface SavingsCardProps {
   savingsPercent: number;
   modelUsed?: string;
   codec?: string;
+  crf?: number | string;
+  preset?: number | string;
   vmafScore?: number | null;
   restored: boolean;
   mediaKind?: string;
   tier?: string;
   jobId?: string;
+  expiresAt?: string | Date | null;   // Cloudflare R2 expiry
   onDownload?: (dataUrl: string) => void;
 }
 
@@ -21,11 +25,14 @@ export function SavingsCard({
   savingsPercent,
   modelUsed,
   codec,
+  crf,
+  preset,
   vmafScore,
   restored,
   mediaKind = 'video',
   tier = 'free',
   jobId,
+  expiresAt,
   onDownload,
 }: SavingsCardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,124 +43,172 @@ export function SavingsCard({
     return `${bytes} B`;
   };
 
+  const expiryLabel = () => {
+    if (!expiresAt) return '48 hours';
+    try {
+      const d = new Date(expiresAt);
+      const hours = Math.round((d.getTime() - Date.now()) / 36e5);
+      if (hours > 0 && hours < 72) return `${hours} hours`;
+      return d.toLocaleDateString();
+    } catch {
+      return '48 hours';
+    }
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const W = 800;
-    const H = 520;
+    const W = 840;
+    const H = 620;
     canvas.width = W;
     canvas.height = H;
 
     // Background
-    ctx.fillStyle = '#1a1614';
+    ctx.fillStyle = '#1c1917';
     ctx.fillRect(0, 0, W, H);
 
-    // Subtle border
-    ctx.strokeStyle = '#2a2420';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, W - 2, H - 2);
+    // Outer border
+    ctx.strokeStyle = '#292524';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(0.75, 0.75, W - 1.5, H - 1.5);
 
     // Header
     ctx.fillStyle = '#f97316';
-    ctx.font = 'bold 28px system-ui, sans-serif';
-    ctx.fillText('ReaganXS', 32, 48);
+    ctx.font = 'bold 32px system-ui, sans-serif';
+    ctx.fillText('ReaganXS', 36, 52);
 
     ctx.fillStyle = '#a8a29e';
-    ctx.font = '14px system-ui, sans-serif';
-    ctx.fillText('Results', 32, 72);
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillText('Results', 36, 76);
 
     // Tier badge
-    ctx.fillStyle = '#3f3a36';
+    ctx.fillStyle = '#292524';
     ctx.beginPath();
-    ctx.roundRect(W - 140, 28, 108, 28, 14);
+    ctx.roundRect(W - 156, 32, 120, 32, 16);
     ctx.fill();
-    ctx.fillStyle = '#c4b5a0';
+    ctx.fillStyle = '#d6d3d1';
     ctx.font = '12px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(tier.toUpperCase(), W - 86, 46);
+    ctx.fillText(tier.toUpperCase(), W - 96, 52);
     ctx.textAlign = 'left';
 
-    // Main savings
+    // Big savings
     ctx.fillStyle = '#f97316';
-    ctx.font = 'bold 72px system-ui, sans-serif';
-    ctx.fillText(`${Math.round(savingsPercent)}%`, 32, 180);
+    ctx.font = 'bold 80px system-ui, sans-serif';
+    ctx.fillText(`${Math.round(savingsPercent)}%`, 36, 190);
 
     ctx.fillStyle = '#a8a29e';
     ctx.font = '16px system-ui, sans-serif';
-    ctx.fillText('Bandwidth saved', 32, 210);
+    ctx.fillText('Bandwidth saved', 36, 218);
 
-    ctx.fillStyle = '#d6d3d1';
-    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = '#e7e5e4';
+    ctx.font = '16px system-ui, sans-serif';
     ctx.fillText(
       `${formatSize(originalSize)} → ${formatSize(finalSize)}`,
-      32,
-      236
+      36,
+      246
     );
 
-    // Pipeline section
+    // Pipeline card
     const pipeY = 280;
     ctx.fillStyle = '#292524';
     ctx.beginPath();
-    ctx.roundRect(24, pipeY, W - 48, 140, 12);
+    ctx.roundRect(28, pipeY, W - 56, 180, 14);
     ctx.fill();
 
     ctx.fillStyle = '#fafaf9';
-    ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.fillText('Processing Pipeline', 40, pipeY + 28);
+    ctx.font = 'bold 17px system-ui, sans-serif';
+    ctx.fillText('Processing Pipeline', 48, pipeY + 32);
+
+    const compressSub = [
+      codec ? codec.toUpperCase() : 'SVT-AV1',
+      crf != null ? `CRF ${crf}` : null,
+      preset != null ? `Preset ${preset}` : null,
+    ]
+      .filter(Boolean)
+      .join(' • ');
 
     const steps = [
-      { n: '1', title: 'Aggressive Compression', sub: codec ? codec.toUpperCase() : 'SVT-AV1' },
-      { n: '2', title: restored ? 'Smart Routing + Restoration' : 'Smart Routing', sub: restored ? (modelUsed || 'Restored') : 'Compressed only' },
-      { n: '3', title: 'Ready for download', sub: mediaKind === 'image' ? 'Image' : 'Video' },
+      {
+        n: '1',
+        title: 'Aggressive Compression',
+        sub: compressSub || 'SVT-AV1',
+      },
+      {
+        n: '2',
+        title: restored ? 'Smart Routing + Restoration' : 'Smart Routing',
+        sub: restored ? (modelUsed || 'Restored') : 'Compressed only',
+      },
+      {
+        n: '3',
+        title: 'Upload to Cloudflare R2',
+        sub: `${expiryLabel()} expiry`,
+      },
     ];
 
     steps.forEach((s, i) => {
-      const y = pipeY + 58 + i * 28;
+      const y = pipeY + 68 + i * 36;
+      // green circle
       ctx.fillStyle = '#22c55e';
       ctx.beginPath();
-      ctx.arc(52, y - 4, 10, 0, Math.PI * 2);
+      ctx.arc(60, y - 4, 11, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#1a1614';
-      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillStyle = '#1c1917';
+      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(s.n, 52, y);
+      ctx.fillText(s.n, 60, y);
       ctx.textAlign = 'left';
+
       ctx.fillStyle = '#fafaf9';
-      ctx.font = '13px system-ui, sans-serif';
-      ctx.fillText(s.title, 72, y);
+      ctx.font = '14px system-ui, sans-serif';
+      ctx.fillText(s.title, 84, y);
       ctx.fillStyle = '#a8a29e';
-      ctx.font = '11px system-ui, sans-serif';
-      ctx.fillText(s.sub, 280, y);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillText(s.sub, 340, y);
     });
 
-    // Bottom stats
-    const statsY = 450;
+    // Bottom stats row
+    const statsY = 500;
     const stats = [
-      { label: 'VMAF', value: vmafScore != null ? String(Math.round(vmafScore)) : '—' },
+      { label: 'VMAF', value: vmafScore != null ? String(Math.round(vmafScore)) : 'Not measured' },
       { label: 'Model', value: modelUsed || (restored ? 'Restored' : '—') },
       { label: 'Codec', value: codec || '—' },
     ];
 
     stats.forEach((st, i) => {
-      const x = 40 + i * 240;
+      const x = 48 + i * 250;
       ctx.fillStyle = '#a8a29e';
-      ctx.font = '11px system-ui, sans-serif';
+      ctx.font = '12px system-ui, sans-serif';
       ctx.fillText(st.label, x, statsY);
       ctx.fillStyle = '#fafaf9';
-      ctx.font = 'bold 14px system-ui, sans-serif';
-      ctx.fillText(st.value, x, statsY + 20);
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.fillText(st.value, x, statsY + 22);
     });
 
     // Footer
     if (jobId) {
       ctx.fillStyle = '#57534e';
-      ctx.font = '10px system-ui, sans-serif';
-      ctx.fillText(`Job ${jobId.slice(-8)}`, 32, H - 16);
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(`Job ${jobId.slice(-8)}`, 36, H - 20);
     }
-  }, [originalSize, finalSize, savingsPercent, modelUsed, codec, vmafScore, restored, mediaKind, tier, jobId]);
+  }, [
+    originalSize,
+    finalSize,
+    savingsPercent,
+    modelUsed,
+    codec,
+    crf,
+    preset,
+    vmafScore,
+    restored,
+    mediaKind,
+    tier,
+    jobId,
+    expiresAt,
+  ]);
 
   const download = () => {
     const canvas = canvasRef.current;
@@ -170,7 +225,7 @@ export function SavingsCard({
     <div className="space-y-3">
       <canvas
         ref={canvasRef}
-        className="w-full max-w-md rounded-xl border border-stone-800"
+        className="w-full max-w-lg rounded-xl border border-stone-800"
         style={{ imageRendering: 'auto' }}
       />
       <button

@@ -1,3 +1,5 @@
+app/web/src/components/ui/SavingsCard
+
 'use client';
 
 import { useRef, useState } from 'react';
@@ -20,6 +22,10 @@ type Job = {
   isDemo?: boolean;
   previewFrames?: string[];
   previewClipUrl?: string | null;
+  crf?: number | string;
+  preset?: number | string;
+  expiresAt?: string | Date | null;
+  tier?: string;
 };
 
 function formatBytes(n?: number) {
@@ -28,6 +34,18 @@ function formatBytes(n?: number) {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function expiryLabel(expiresAt?: string | Date | null) {
+  if (!expiresAt) return '48 hours';
+  try {
+    const d = new Date(expiresAt);
+    const hours = Math.round((d.getTime() - Date.now()) / 36e5);
+    if (hours > 0 && hours < 96) return `${hours} hours`;
+    return d.toLocaleDateString();
+  } catch {
+    return '48 hours';
+  }
 }
 
 export default function SavingsCard({
@@ -52,6 +70,14 @@ export default function SavingsCard({
       ? job.vmafScore
       : null;
   const frames = job.previewFrames || [];
+
+  const compressDetail = [
+    job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
+    job.crf != null ? `CRF ${job.crf}` : null,
+    job.preset != null ? `Preset ${job.preset}` : null,
+  ]
+    .filter(Boolean)
+    .join(' • ');
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
@@ -133,10 +159,9 @@ export default function SavingsCard({
         ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 space-y-5 text-white"
       >
-        {/* Logo + title — captured in PNG/JPG */}
+        {/* Header */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            {/* Prefer /logo.png in public/; fallback mark always exports */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.png"
@@ -169,9 +194,11 @@ export default function SavingsCard({
           </div>
           <span className="text-xs text-white/40 shrink-0">
             {isLoggedIn ? 'Account' : 'Demo'}
+            {job.tier ? ` · ${job.tier}` : ''}
           </span>
         </div>
 
+        {/* Main metrics */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           <div>
             <p className="text-xs text-white/40 mb-1">Bandwidth saved</p>
@@ -204,6 +231,50 @@ export default function SavingsCard({
           </p>
         )}
 
+        {/* Processing Pipeline */}
+        <div className="rounded-2xl bg-[#292524] p-4 space-y-3">
+          <p className="text-sm font-semibold text-white/90">Processing Pipeline</p>
+          <div className="space-y-2.5 text-sm">
+            <div className="flex items-start gap-3">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
+                1
+              </span>
+              <div>
+                <p className="text-white/90">Aggressive Compression</p>
+                <p className="text-[11px] text-white/45">{compressDetail}</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
+                2
+              </span>
+              <div>
+                <p className="text-white/90">
+                  {restored ? 'Smart Routing + Restoration' : 'Smart Routing'}
+                </p>
+                <p className="text-[11px] text-white/45">
+                  {restored ? label : 'Compressed only'}
+                  {job.restoreMode && job.restoreMode !== 'none'
+                    ? ` · ${job.restoreMode}`
+                    : ''}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-black">
+                3
+              </span>
+              <div>
+                <p className="text-white/90">Upload to Cloudflare R2</p>
+                <p className="text-[11px] text-white/45">
+                  {expiryLabel(job.expiresAt)} expiry
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Status line */}
         {restored ? (
           <p className="text-xs text-emerald-300 border-t border-white/10 pt-3">
             {job.restoreMode === 'partial-frames'
