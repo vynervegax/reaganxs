@@ -10,61 +10,65 @@ type Job = {
   restored?: boolean;
   didRestore?: boolean;
   restoreMode?: 'none' | 'full' | 'partial-frames' | string;
+  restoreSkippedReason?: string | null;
+  reason?: string;
   vmafScore?: number | null;
   originalSize?: number;
   finalSize?: number;
   codec?: string;
+  stages?: string[];
+  isDemo?: boolean;
   previewFrames?: string[];
+  previewClipUrl?: string | null;
   crf?: number | string;
   preset?: number | string;
   expiresAt?: string | Date | null;
-  completedAt?: string | Date | null;
+  tier?: string;
   createdAt?: string | Date | null;
-  updatedAt?: string | Date | null;
-  finishedAt?: string | Date | null;
-  processedAt?: string | Date | null;
-  completed_at?: string | Date | null;
-  created_at?: string | Date | null;
-  updated_at?: string | Date | null;
-  [key: string]: unknown;
+  completedAt?: string | Date | null;
+  processingTimeMs?: number;
+  platform?: string;
 };
 
 function formatBytes(n?: number) {
   if (!n || n <= 0) return '—';
+  if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(2)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function formatTimestamp(d?: string | Date | null) {
+function formatDate(d?: string | Date | null) {
   if (!d) return '—';
   try {
-    const date = new Date(d);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleString(undefined, {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    return new Date(d).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
     });
   } catch {
     return '—';
   }
 }
 
-function pickTimestamp(job: Job): string | Date | null | undefined {
-  return (
-    job.completedAt ||
-    job.updatedAt ||
-    job.finishedAt ||
-    job.processedAt ||
-    job.completed_at ||
-    job.updated_at ||
-    job.createdAt ||
-    job.created_at ||
-    null
-  );
+function formatDuration(ms?: number) {
+  if (!ms || ms <= 0) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
+}
+
+function expiryLabel(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
+  if (expiresAt) {
+    try {
+      const d = new Date(expiresAt);
+      const hours = Math.round((d.getTime() - Date.now()) / 36e5);
+      if (hours > 0 && hours < 120) return `${hours} hours`;
+      return d.toLocaleDateString();
+    } catch { /* fall through */ }
+  }
+  return isLoggedIn ? '48 hours' : '6 hours';
 }
 
 export default function SavingsCard({
@@ -102,7 +106,14 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  const stamp = pickTimestamp(job);
+  const shareText = [
+    `ReaganXS · saved ${savings}%`,
+    vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
+    `Model: ${label}`,
+    job.url ? `Download: ${job.url}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const onDownloadVideo = () => {
     if (!job.url) return;
@@ -120,15 +131,13 @@ export default function SavingsCard({
       if (navigator.share) {
         await navigator.share({
           title: 'ReaganXS result',
-          text: `ReaganXS · saved ${Math.round(savings)}%`,
+          text: shareText,
           url: job.url,
         });
         setShareMsg('Shared');
         return;
       }
-      await navigator.clipboard.writeText(
-        `ReaganXS · saved ${Math.round(savings)}%\n${job.url || ''}`
-      );
+      await navigator.clipboard.writeText(shareText);
       setShareMsg('Copied to clipboard');
     } catch {
       setShareMsg('Share cancelled');
@@ -148,7 +157,7 @@ export default function SavingsCard({
         useCORS: true,
         allowTaint: false,
         logging: false,
-        imageTimeout: 10000,
+        imageTimeout: 8000,
       });
       const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
       const dataUrl = canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined);
@@ -165,151 +174,154 @@ export default function SavingsCard({
     }
   };
 
-  const circumference = 2 * Math.PI * 58;
-  const dash = (savings / 100) * circumference;
+  const InfoRow = ({
+    label,
+    value,
+  }: {
+    label: string;
+    value: React.ReactNode;
+  }) => (
+    <div className="flex justify-between gap-4 py-1.5 border-b border-white/5 last:border-0">
+      <span className="text-white/45 text-xs shrink-0">{label}</span>
+      <span className="text-white/90 text-xs text-right break-words max-w-[65%]">
+        {value}
+      </span>
+    </div>
+  );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div
         ref={cardRef}
-        style={{
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-          background: '#1c140f',
-          color: 'white',
-          borderRadius: 28,
-          border: '1px solid rgba(255,255,255,0.1)',
-          padding: '36px 32px 40px',
-          maxWidth: 540,
-          margin: '0 auto',
-          boxSizing: 'border-box',
-        }}
+        className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
+        style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Title */}
-        <div style={{ textAlign: 'center', marginBottom: 8 }}>
-          <p style={{ fontSize: 36, fontWeight: 800, letterSpacing: -0.5, margin: 0, lineHeight: 1.1 }}>
-            <span style={{ color: '#f97316' }}>Reagan</span>
-            <span style={{ color: '#c084fc' }}>XS</span>
+        {/* Brand header */}
+        <div className="text-center mb-6">
+          <p
+            className="text-3xl font-bold tracking-tight"
+            style={{
+              background: 'linear-gradient(90deg, #f97316, #c084fc)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+            }}
+          >
+            ReaganXS
           </p>
-          <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', marginTop: 8, marginBottom: 0 }}>
-            Bandwidth Savings Report
-          </p>
+          <p className="text-sm text-white/50 mt-1">Processing Report</p>
         </div>
 
-        {/* Donut */}
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '28px 0 32px' }}>
-          <svg width={180} height={180} viewBox="0 0 180 180">
-            <defs>
-              <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#f97316" />
-                <stop offset="50%" stopColor="#fb923c" />
-                <stop offset="100%" stopColor="#c084fc" />
-              </linearGradient>
-            </defs>
-            <circle
-              cx={90}
-              cy={90}
-              r={58}
-              fill="none"
-              stroke="#3f3f46"
-              strokeWidth={16}
-            />
-            <circle
-              cx={90}
-              cy={90}
-              r={58}
-              fill="none"
-              stroke="url(#donutGrad)"
-              strokeWidth={16}
-              strokeDasharray={`${dash} ${circumference}`}
-              strokeLinecap="round"
-              transform="rotate(-90 90 90)"
-            />
-            <text
-              x={90}
-              y={84}
-              textAnchor="middle"
-              fill="#f97316"
-              fontSize={42}
-              fontWeight={800}
-              fontFamily="system-ui, sans-serif"
-            >
-              {Math.round(savings)}%
-            </text>
-            <text
-              x={90}
-              y={106}
-              textAnchor="middle"
-              fill="rgba(255,255,255,0.55)"
-              fontSize={13}
-              fontFamily="system-ui, sans-serif"
-            >
-              saved
-            </text>
-          </svg>
-        </div>
-
-        {/* Size bars */}
-        <div style={{ marginBottom: 28 }}>
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
-              <span>Original</span>
-              <span>{formatBytes(orig)}</span>
-            </div>
-            <div style={{ height: 12, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-              <div style={{ width: `${origPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #a855f7, #c084fc)' }} />
-            </div>
-          </div>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
-              <span>After ReaganXS</span>
-              <span>{formatBytes(fin)}</span>
-            </div>
-            <div style={{ height: 12, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-              <div style={{ width: `${finPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #f97316, #fb923c)' }} />
-            </div>
-          </div>
-        </div>
-
-        {/* Facts */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[
-            { label: 'COMPRESSION', value: compressLine },
-            { label: 'MODEL', value: restored ? label : 'None' },
-            { label: 'PROCESSED', value: formatTimestamp(stamp) },
-            { label: 'SIZE', value: `${formatBytes(orig)} → ${formatBytes(fin)}` },
-            ...(vmaf != null ? [{ label: 'VMAF', value: vmaf.toFixed(1) }] : []),
-          ].map((item) => (
+        {/* Savings hero */}
+        <div className="flex justify-center mb-6">
+          <div
+            className="relative flex items-center justify-center"
+            style={{
+              width: 148,
+              height: 148,
+              borderRadius: '50%',
+              background: `conic-gradient(from 200deg, #f97316 0deg, #fb923c ${savings * 1.6}deg, #c084fc ${savings * 3.6}deg, #3f3f46 ${savings * 3.6}deg)`,
+            }}
+          >
             <div
-              key={item.label}
-              style={{
-                borderRadius: 14,
-                background: 'rgba(255,255,255,0.05)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                padding: '14px 16px',
-                minHeight: 72,
-              }}
+              className="flex flex-col items-center justify-center bg-[#1c140f]"
+              style={{ width: 114, height: 114, borderRadius: '50%' }}
             >
-              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', letterSpacing: 0.6, margin: 0, fontWeight: 500 }}>
-                {item.label}
-              </p>
-              <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.92)', margin: '6px 0 0', lineHeight: 1.4, wordBreak: 'break-word' }}>
-                {item.value}
-              </p>
+              <span
+                className="text-4xl font-bold leading-none"
+                style={{
+                  background: 'linear-gradient(90deg, #f97316, #c084fc)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                }}
+              >
+                {Math.round(savings)}%
+              </span>
+              <span className="text-[11px] text-white/50 mt-1">saved</span>
             </div>
-          ))}
+          </div>
+        </div>
+
+        {/* Size comparison */}
+        <div className="mb-6">
+          <div className="flex justify-between text-xs text-white/40 mb-2">
+            <span>Original</span>
+            <span>After ReaganXS</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <div className="h-2.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${origPct}%`,
+                    background: 'linear-gradient(90deg, #a855f7, #c084fc)',
+                  }}
+                />
+              </div>
+              <p className="text-xs text-white/70 mt-1 text-center">{formatBytes(orig)}</p>
+            </div>
+            <span className="text-white/30 text-xs">→</span>
+            <div className="flex-1">
+              <div className="h-2.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${finPct}%`,
+                    background: 'linear-gradient(90deg, #f97316, #fb923c)',
+                  }}
+                />
+              </div>
+              <p className="text-xs text-white/70 mt-1 text-center">{formatBytes(fin)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Full details */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/10 px-4 py-2 mb-4">
+          <InfoRow label="Compression" value={compressLine} />
+          <InfoRow label="Model" value={restored ? label : 'None'} />
+          <InfoRow label="Restore mode" value={job.restoreMode || (restored ? 'full' : 'none')} />
+          <InfoRow label="VMAF" value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'} />
+          <InfoRow label="Tier" value={job.tier ? String(job.tier).toUpperCase() : isLoggedIn ? 'ACCOUNT' : 'DEMO'} />
+          <InfoRow label="Platform" value={job.platform || 'Web'} />
+          <InfoRow label="Started" value={formatDate(job.createdAt)} />
+          <InfoRow label="Completed" value={formatDate(job.completedAt)} />
+          <InfoRow label="Processing time" value={formatDuration(job.processingTimeMs)} />
+          <InfoRow label="Expires" value={expiryLabel(job.expiresAt, isLoggedIn)} />
+          {job.codec && <InfoRow label="Codec" value={job.codec.toUpperCase()} />}
+          {job.restoreSkippedReason && (
+            <InfoRow label="Restore note" value={job.restoreSkippedReason} />
+          )}
         </div>
 
         {restored && (
-          <p style={{ textAlign: 'center', fontSize: 13, color: '#34d399', marginTop: 22, marginBottom: 0, fontWeight: 500 }}>
+          <p className="text-center text-xs text-emerald-400 mb-3">
             {job.restoreMode === 'partial-frames'
-              ? `Partial restore · ${frames.length} frames`
-              : 'Restored'}
+              ? `Partial frame restore · ${frames.length} samples`
+              : 'Fully restored'}
           </p>
+        )}
+
+        {job.restoreMode === 'partial-frames' && frames.length > 0 && (
+          <div className="flex justify-center gap-2 mt-2">
+            {frames.slice(0, 4).map((src) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={src}
+                src={src}
+                alt=""
+                className="h-16 w-auto rounded-lg border border-white/10 object-cover"
+                crossOrigin="anonymous"
+              />
+            ))}
+          </div>
         )}
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap gap-3 justify-center">
+      <div className="flex flex-wrap gap-3">
         {job.url && (
           <button
             type="button"
@@ -344,7 +356,7 @@ export default function SavingsCard({
         </button>
       </div>
 
-      {shareMsg && <p className="text-xs text-white/40 text-center">{shareMsg}</p>}
+      {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
     </div>
   );
 }
