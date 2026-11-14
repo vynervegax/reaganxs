@@ -140,13 +140,14 @@ export default function SavingsCard({
     if (!el) return null;
     const { default: html2canvas } = await import('html2canvas');
     const canvas = await html2canvas(el, {
-      backgroundColor: '#1c140f',
-      scale: 2,
-      useCORS: true,
-      allowTaint: false,
-      logging: false,
-      imageTimeout: 5000,
-    });
+  backgroundColor: '#1c140f',
+  scale: 3,              // was 2 — sharper export
+  useCORS: true,
+  allowTaint: false,
+  logging: false,
+  imageTimeout: 8000,
+  foreignObjectRendering: false, // often more reliable than true
+});
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob((b) => resolve(b), 'image/png')
     );
