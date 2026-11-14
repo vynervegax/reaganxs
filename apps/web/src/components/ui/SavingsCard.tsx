@@ -21,6 +21,12 @@ type Job = {
   completedAt?: string | Date | null;
   createdAt?: string | Date | null;
   updatedAt?: string | Date | null;
+  finishedAt?: string | Date | null;
+  processedAt?: string | Date | null;
+  completed_at?: string | Date | null;
+  created_at?: string | Date | null;
+  updated_at?: string | Date | null;
+  [key: string]: unknown;
 };
 
 function formatBytes(n?: number) {
@@ -45,6 +51,20 @@ function formatTimestamp(d?: string | Date | null) {
   } catch {
     return '—';
   }
+}
+
+function pickTimestamp(job: Job): string | Date | null | undefined {
+  return (
+    job.completedAt ||
+    job.updatedAt ||
+    job.finishedAt ||
+    job.processedAt ||
+    job.completed_at ||
+    job.updated_at ||
+    job.createdAt ||
+    job.created_at ||
+    null
+  );
 }
 
 export default function SavingsCard({
@@ -82,7 +102,7 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  const stamp = job.completedAt || job.updatedAt || job.createdAt;
+  const stamp = pickTimestamp(job);
 
   const onDownloadVideo = () => {
     if (!job.url) return;
@@ -164,7 +184,7 @@ export default function SavingsCard({
           boxSizing: 'border-box',
         }}
       >
-        {/* Title — solid colors (exports reliably) */}
+        {/* Title */}
         <div style={{ textAlign: 'center', marginBottom: 8 }}>
           <p style={{ fontSize: 36, fontWeight: 800, letterSpacing: -0.5, margin: 0, lineHeight: 1.1 }}>
             <span style={{ color: '#f97316' }}>Reagan</span>
@@ -175,7 +195,7 @@ export default function SavingsCard({
           </p>
         </div>
 
-        {/* Donut with SVG gradient */}
+        {/* Donut */}
         <div style={{ display: 'flex', justifyContent: 'center', margin: '28px 0 32px' }}>
           <svg width={180} height={180} viewBox="0 0 180 180">
             <defs>
@@ -185,7 +205,6 @@ export default function SavingsCard({
                 <stop offset="100%" stopColor="#c084fc" />
               </linearGradient>
             </defs>
-            {/* Track */}
             <circle
               cx={90}
               cy={90}
@@ -194,7 +213,6 @@ export default function SavingsCard({
               stroke="#3f3f46"
               strokeWidth={16}
             />
-            {/* Progress */}
             <circle
               cx={90}
               cy={90}
@@ -206,7 +224,6 @@ export default function SavingsCard({
               strokeLinecap="round"
               transform="rotate(-90 90 90)"
             />
-            {/* Center text */}
             <text
               x={90}
               y={84}
@@ -234,78 +251,27 @@ export default function SavingsCard({
         {/* Size bars */}
         <div style={{ marginBottom: 28 }}>
           <div style={{ marginBottom: 18 }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: 13,
-                color: 'rgba(255,255,255,0.55)',
-                marginBottom: 6,
-              }}
-            >
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
               <span>Original</span>
               <span>{formatBytes(orig)}</span>
             </div>
-            <div
-              style={{
-                height: 12,
-                borderRadius: 999,
-                background: 'rgba(255,255,255,0.08)',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  width: `${origPct}%`,
-                  height: '100%',
-                  borderRadius: 999,
-                  background: 'linear-gradient(90deg, #a855f7, #c084fc)',
-                }}
-              />
+            <div style={{ height: 12, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+              <div style={{ width: `${origPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #a855f7, #c084fc)' }} />
             </div>
           </div>
-
           <div>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: 13,
-                color: 'rgba(255,255,255,0.55)',
-                marginBottom: 6,
-              }}
-            >
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
               <span>After ReaganXS</span>
               <span>{formatBytes(fin)}</span>
             </div>
-            <div
-              style={{
-                height: 12,
-                borderRadius: 999,
-                background: 'rgba(255,255,255,0.08)',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  width: `${finPct}%`,
-                  height: '100%',
-                  borderRadius: 999,
-                  background: 'linear-gradient(90deg, #f97316, #fb923c)',
-                }}
-              />
+            <div style={{ height: 12, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+              <div style={{ width: `${finPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #f97316, #fb923c)' }} />
             </div>
           </div>
         </div>
 
-        {/* Facts grid */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 12,
-          }}
-        >
+        {/* Facts */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[
             { label: 'COMPRESSION', value: compressLine },
             { label: 'MODEL', value: restored ? label : 'None' },
@@ -323,26 +289,10 @@ export default function SavingsCard({
                 minHeight: 72,
               }}
             >
-              <p
-                style={{
-                  fontSize: 11,
-                  color: 'rgba(255,255,255,0.4)',
-                  letterSpacing: 0.6,
-                  margin: 0,
-                  fontWeight: 500,
-                }}
-              >
+              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', letterSpacing: 0.6, margin: 0, fontWeight: 500 }}>
                 {item.label}
               </p>
-              <p
-                style={{
-                  fontSize: 14,
-                  color: 'rgba(255,255,255,0.92)',
-                  margin: '6px 0 0',
-                  lineHeight: 1.4,
-                  wordBreak: 'break-word',
-                }}
-              >
+              <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.92)', margin: '6px 0 0', lineHeight: 1.4, wordBreak: 'break-word' }}>
                 {item.value}
               </p>
             </div>
@@ -350,16 +300,7 @@ export default function SavingsCard({
         </div>
 
         {restored && (
-          <p
-            style={{
-              textAlign: 'center',
-              fontSize: 13,
-              color: '#34d399',
-              marginTop: 22,
-              marginBottom: 0,
-              fontWeight: 500,
-            }}
-          >
+          <p style={{ textAlign: 'center', fontSize: 13, color: '#34d399', marginTop: 22, marginBottom: 0, fontWeight: 500 }}>
             {job.restoreMode === 'partial-frames'
               ? `Partial restore · ${frames.length} frames`
               : 'Restored'}
@@ -367,7 +308,7 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* Actions (outside the captured card) */}
+      {/* Actions */}
       <div className="flex flex-wrap gap-3 justify-center">
         {job.url && (
           <button
@@ -403,9 +344,7 @@ export default function SavingsCard({
         </button>
       </div>
 
-      {shareMsg && (
-        <p className="text-xs text-white/40 text-center">{shareMsg}</p>
-      )}
+      {shareMsg && <p className="text-xs text-white/40 text-center">{shareMsg}</p>}
     </div>
   );
 }

@@ -129,6 +129,14 @@ export default function ProcessPage() {
           /* ignore */
         }
 
+console.log('TIMESTAMP FIELDS:', {
+  completedAt: j.completedAt,
+  updatedAt: j.updatedAt,
+  createdAt: j.createdAt,
+  finishedAt: j.finishedAt,
+  processedAt: j.processedAt,
+});
+
         if (j.status === 'completed' && j.finalUrl) {
   handleUploadComplete({
     url: j.finalUrl,
