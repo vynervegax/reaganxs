@@ -20,6 +20,7 @@ type Job = {
   expiresAt?: string | Date | null;
   completedAt?: string | Date | null;
   createdAt?: string | Date | null;
+  updatedAt?: string | Date | null;
 };
 
 function formatBytes(n?: number) {
@@ -81,7 +82,7 @@ export default function SavingsCard({
     job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
   ].join(' · ');
 
-  const stamp = job.completedAt || job.createdAt;
+  const stamp = job.completedAt || job.updatedAt || job.createdAt;
 
   const onDownloadVideo = () => {
     if (!job.url) return;
@@ -99,14 +100,14 @@ export default function SavingsCard({
       if (navigator.share) {
         await navigator.share({
           title: 'ReaganXS result',
-          text: `ReaganXS · saved ${savings}%`,
+          text: `ReaganXS · saved ${Math.round(savings)}%`,
           url: job.url,
         });
         setShareMsg('Shared');
         return;
       }
       await navigator.clipboard.writeText(
-        `ReaganXS · saved ${savings}%\n${job.url || ''}`
+        `ReaganXS · saved ${Math.round(savings)}%\n${job.url || ''}`
       );
       setShareMsg('Copied to clipboard');
     } catch {
@@ -127,7 +128,7 @@ export default function SavingsCard({
         useCORS: true,
         allowTaint: false,
         logging: false,
-        imageTimeout: 8000,
+        imageTimeout: 10000,
       });
       const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
       const dataUrl = canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined);
@@ -144,87 +145,167 @@ export default function SavingsCard({
     }
   };
 
+  const circumference = 2 * Math.PI * 58;
+  const dash = (savings / 100) * circumference;
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div
         ref={cardRef}
         style={{
-          fontFamily: 'system-ui, sans-serif',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
           background: '#1c140f',
           color: 'white',
-          borderRadius: 24,
+          borderRadius: 28,
           border: '1px solid rgba(255,255,255,0.1)',
-          padding: 28,
-          maxWidth: 520,
+          padding: '36px 32px 40px',
+          maxWidth: 540,
           margin: '0 auto',
+          boxSizing: 'border-box',
         }}
       >
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <p style={{ fontSize: 32, fontWeight: 700, letterSpacing: -0.5, margin: 0 }}>
+        {/* Title — solid colors (exports reliably) */}
+        <div style={{ textAlign: 'center', marginBottom: 8 }}>
+          <p style={{ fontSize: 36, fontWeight: 800, letterSpacing: -0.5, margin: 0, lineHeight: 1.1 }}>
             <span style={{ color: '#f97316' }}>Reagan</span>
             <span style={{ color: '#c084fc' }}>XS</span>
           </p>
-          <p style={{ fontSize: 15, color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
+          <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', marginTop: 8, marginBottom: 0 }}>
             Bandwidth Savings Report
           </p>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-          <div
-            style={{
-              width: 150,
-              height: 150,
-              borderRadius: '50%',
-              background: `conic-gradient(from 180deg, #f97316 0deg, #fb923c ${savings * 1.8}deg, #c084fc ${savings * 3.6}deg, #3f3f46 ${savings * 3.6}deg)`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <div
-              style={{
-                width: 114,
-                height: 114,
-                borderRadius: '50%',
-                background: '#1c140f',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
+        {/* Donut with SVG gradient */}
+        <div style={{ display: 'flex', justifyContent: 'center', margin: '28px 0 32px' }}>
+          <svg width={180} height={180} viewBox="0 0 180 180">
+            <defs>
+              <linearGradient id="donutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#f97316" />
+                <stop offset="50%" stopColor="#fb923c" />
+                <stop offset="100%" stopColor="#c084fc" />
+              </linearGradient>
+            </defs>
+            {/* Track */}
+            <circle
+              cx={90}
+              cy={90}
+              r={58}
+              fill="none"
+              stroke="#3f3f46"
+              strokeWidth={16}
+            />
+            {/* Progress */}
+            <circle
+              cx={90}
+              cy={90}
+              r={58}
+              fill="none"
+              stroke="url(#donutGrad)"
+              strokeWidth={16}
+              strokeDasharray={`${dash} ${circumference}`}
+              strokeLinecap="round"
+              transform="rotate(-90 90 90)"
+            />
+            {/* Center text */}
+            <text
+              x={90}
+              y={84}
+              textAnchor="middle"
+              fill="#f97316"
+              fontSize={42}
+              fontWeight={800}
+              fontFamily="system-ui, sans-serif"
             >
-              <span style={{ fontSize: 40, fontWeight: 700, color: '#f97316', lineHeight: 1 }}>
-                {Math.round(savings)}%
-              </span>
-              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 4 }}>
-                saved
-              </span>
-            </div>
-          </div>
+              {Math.round(savings)}%
+            </text>
+            <text
+              x={90}
+              y={106}
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.55)"
+              fontSize={13}
+              fontFamily="system-ui, sans-serif"
+            >
+              saved
+            </text>
+          </svg>
         </div>
 
+        {/* Size bars */}
         <div style={{ marginBottom: 28 }}>
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
+          <div style={{ marginBottom: 18 }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: 13,
+                color: 'rgba(255,255,255,0.55)',
+                marginBottom: 6,
+              }}
+            >
               <span>Original</span>
               <span>{formatBytes(orig)}</span>
             </div>
-            <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              <div style={{ width: `${origPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #a855f7, #c084fc)' }} />
+            <div
+              style={{
+                height: 12,
+                borderRadius: 999,
+                background: 'rgba(255,255,255,0.08)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${origPct}%`,
+                  height: '100%',
+                  borderRadius: 999,
+                  background: 'linear-gradient(90deg, #a855f7, #c084fc)',
+                }}
+              />
             </div>
           </div>
+
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: 13,
+                color: 'rgba(255,255,255,0.55)',
+                marginBottom: 6,
+              }}
+            >
               <span>After ReaganXS</span>
               <span>{formatBytes(fin)}</span>
             </div>
-            <div style={{ height: 14, borderRadius: 999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              <div style={{ width: `${finPct}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg, #f97316, #fb923c)' }} />
+            <div
+              style={{
+                height: 12,
+                borderRadius: 999,
+                background: 'rgba(255,255,255,0.08)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${finPct}%`,
+                  height: '100%',
+                  borderRadius: 999,
+                  background: 'linear-gradient(90deg, #f97316, #fb923c)',
+                }}
+              />
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        {/* Facts grid */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 12,
+          }}
+        >
           {[
             { label: 'COMPRESSION', value: compressLine },
             { label: 'MODEL', value: restored ? label : 'None' },
@@ -235,16 +316,33 @@ export default function SavingsCard({
             <div
               key={item.label}
               style={{
-                borderRadius: 12,
+                borderRadius: 14,
                 background: 'rgba(255,255,255,0.05)',
                 border: '1px solid rgba(255,255,255,0.1)',
                 padding: '14px 16px',
+                minHeight: 72,
               }}
             >
-              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', letterSpacing: 0.5, margin: 0 }}>
+              <p
+                style={{
+                  fontSize: 11,
+                  color: 'rgba(255,255,255,0.4)',
+                  letterSpacing: 0.6,
+                  margin: 0,
+                  fontWeight: 500,
+                }}
+              >
                 {item.label}
               </p>
-              <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.9)', margin: '6px 0 0', lineHeight: 1.35, wordBreak: 'break-word' }}>
+              <p
+                style={{
+                  fontSize: 14,
+                  color: 'rgba(255,255,255,0.92)',
+                  margin: '6px 0 0',
+                  lineHeight: 1.4,
+                  wordBreak: 'break-word',
+                }}
+              >
                 {item.value}
               </p>
             </div>
@@ -252,7 +350,16 @@ export default function SavingsCard({
         </div>
 
         {restored && (
-          <p style={{ textAlign: 'center', fontSize: 13, color: '#34d399', marginTop: 20 }}>
+          <p
+            style={{
+              textAlign: 'center',
+              fontSize: 13,
+              color: '#34d399',
+              marginTop: 22,
+              marginBottom: 0,
+              fontWeight: 500,
+            }}
+          >
             {job.restoreMode === 'partial-frames'
               ? `Partial restore · ${frames.length} frames`
               : 'Restored'}
@@ -260,7 +367,8 @@ export default function SavingsCard({
         )}
       </div>
 
-      <div className="flex flex-wrap gap-3">
+      {/* Actions (outside the captured card) */}
+      <div className="flex flex-wrap gap-3 justify-center">
         {job.url && (
           <button
             type="button"
@@ -295,7 +403,9 @@ export default function SavingsCard({
         </button>
       </div>
 
-      {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
+      {shareMsg && (
+        <p className="text-xs text-white/40 text-center">{shareMsg}</p>
+      )}
     </div>
   );
 }
