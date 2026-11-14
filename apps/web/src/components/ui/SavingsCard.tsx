@@ -26,7 +26,10 @@ type Job = {
   tier?: string;
   createdAt?: string | Date | null;
   completedAt?: string | Date | null;
+  startedAt?: string | Date | null;
+  finishedAt?: string | Date | null;
   processingTimeMs?: number;
+  durationMs?: number;
   platform?: string;
 };
 
@@ -78,9 +81,7 @@ export default function SavingsCard({
   job: Job | null | undefined;
   isLoggedIn?: boolean;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
   const [shareMsg, setShareMsg] = useState('');
-  const [busy, setBusy] = useState(false);
 
   if (!job) return null;
 
@@ -100,6 +101,11 @@ export default function SavingsCard({
   const origPct = (orig / maxSize) * 100;
   const finPct = (fin / maxSize) * 100;
 
+  // Time fields — check common variants from history/process payloads
+  const started = job.createdAt || job.startedAt || null;
+  const finished = job.completedAt || job.finishedAt || null;
+  const durationMs = job.processingTimeMs || job.durationMs || null;
+
   const compressLine = [
     job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
     job.crf != null ? `CRF ${job.crf}` : 'CRF 28',
@@ -108,12 +114,15 @@ export default function SavingsCard({
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
+    `${formatBytes(orig)} → ${formatBytes(fin)}`,
     vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
     `Model: ${label}`,
     job.url ? `Download: ${job.url}` : null,
   ]
     .filter(Boolean)
     .join('\n');
+
+  const shareTitle = `ReaganXS — ${savings}% bandwidth saved`;
 
   const onDownloadVideo = () => {
     if (!job.url) return;
@@ -125,12 +134,46 @@ export default function SavingsCard({
     a.click();
   };
 
-  const onShare = async () => {
+  const openShare = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer,width=600,height=600');
+  };
+
+  const onShareReddit = () => {
+    const url = job.url
+      ? `https://www.reddit.com/submit?url=${encodeURIComponent(job.url)}&title=${encodeURIComponent(shareTitle)}`
+      : `https://www.reddit.com/submit?title=${encodeURIComponent(shareTitle)}&text=${encodeURIComponent(shareText)}`;
+    openShare(url);
+  };
+
+  const onShareLinkedIn = () => {
+    const target = job.url || window.location.href;
+    const url = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(target)}`;
+    openShare(url);
+  };
+
+  const onShareInstagram = async () => {
+    // Instagram has no reliable web share URL — copy text and open app/web
+    try {
+      await navigator.clipboard.writeText(shareText);
+      setShareMsg('Caption copied — paste it in Instagram');
+    } catch {
+      setShareMsg('Could not copy caption');
+    }
+    // Try to open Instagram
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      window.location.href = 'instagram://app';
+    } else {
+      window.open('https://www.instagram.com/', '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const onShareNative = async () => {
     setShareMsg('');
     try {
       if (navigator.share) {
         await navigator.share({
-          title: 'ReaganXS result',
+          title: shareTitle,
           text: shareText,
           url: job.url,
         });
@@ -141,36 +184,6 @@ export default function SavingsCard({
       setShareMsg('Copied to clipboard');
     } catch {
       setShareMsg('Share cancelled');
-    }
-  };
-
-  const onDownloadCardImage = async (format: 'png' | 'jpeg' = 'png') => {
-    const el = cardRef.current;
-    if (!el) return;
-    setBusy(true);
-    setShareMsg('');
-    try {
-      const { default: html2canvas } = await import('html2canvas');
-      const canvas = await html2canvas(el, {
-        backgroundColor: '#1c140f',
-        scale: 2,
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-        imageTimeout: 8000,
-      });
-      const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-      const dataUrl = canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined);
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `reaganxs-savings-${Date.now()}.${format === 'jpeg' ? 'jpg' : 'png'}`;
-      a.click();
-      setShareMsg(`Card saved as ${format.toUpperCase()}`);
-    } catch (e: any) {
-      console.error(e);
-      setShareMsg(e?.message || 'Could not export card image');
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -192,7 +205,6 @@ export default function SavingsCard({
   return (
     <div className="space-y-3">
       <div
-        ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
@@ -286,9 +298,9 @@ export default function SavingsCard({
           <InfoRow label="VMAF" value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'} />
           <InfoRow label="Tier" value={job.tier ? String(job.tier).toUpperCase() : isLoggedIn ? 'ACCOUNT' : 'DEMO'} />
           <InfoRow label="Platform" value={job.platform || 'Web'} />
-          <InfoRow label="Started" value={formatDate(job.createdAt)} />
-          <InfoRow label="Completed" value={formatDate(job.completedAt)} />
-          <InfoRow label="Processing time" value={formatDuration(job.processingTimeMs)} />
+          <InfoRow label="Started" value={formatDate(started)} />
+          <InfoRow label="Completed" value={formatDate(finished)} />
+          <InfoRow label="Processing time" value={formatDuration(durationMs)} />
           <InfoRow label="Expires" value={expiryLabel(job.expiresAt, isLoggedIn)} />
           {job.codec && <InfoRow label="Codec" value={job.codec.toUpperCase()} />}
           {job.restoreSkippedReason && (
@@ -321,38 +333,47 @@ export default function SavingsCard({
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-2.5">
         {job.url && (
           <button
             type="button"
             onClick={onDownloadVideo}
-            className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"
+            className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#f97316] to-[#c084fc] text-black text-sm font-semibold"
           >
             Download video
           </button>
         )}
+
         <button
           type="button"
-          onClick={onShare}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+          onClick={onShareReddit}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
         >
-          Share result
+          Reddit
         </button>
+
         <button
           type="button"
-          disabled={busy}
-          onClick={() => onDownloadCardImage('png')}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
+          onClick={onShareLinkedIn}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
         >
-          {busy ? 'Exporting…' : 'Download card PNG'}
+          LinkedIn
         </button>
+
         <button
           type="button"
-          disabled={busy}
-          onClick={() => onDownloadCardImage('jpeg')}
-          className="px-5 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
+          onClick={onShareInstagram}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
         >
-          Download card JPG
+          Instagram
+        </button>
+
+        <button
+          type="button"
+          onClick={onShareNative}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+        >
+          More
         </button>
       </div>
 
