@@ -510,263 +510,264 @@ export default function SavingsCard({
 
       {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
 
-      {/* Export poster — full info + nicer type for PNG */}
-      <div
-        ref={exportRef}
-        aria-hidden
+    {/* Export poster — compact for social PNG */}
+<div
+  ref={exportRef}
+  aria-hidden
+  style={{
+    position: 'fixed',
+    left: -10000,
+    top: 0,
+    width: 1080,
+    padding: '40px 44px 36px',
+    boxSizing: 'border-box',
+    background: '#1c140f',
+    color: '#ffffff',
+    fontFamily: FONT,
+  }}
+>
+  {/* Brand row */}
+  <div
+    style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 16,
+      marginBottom: 20,
+    }}
+  >
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
+      <span
         style={{
-          position: 'fixed',
-          left: -10000,
-          top: 0,
-          width: 1080,
-          padding: 56,
-          boxSizing: 'border-box',
-          background: '#1c140f',
-          color: '#ffffff',
-          fontFamily: FONT,
+          fontSize: 28,
+          fontWeight: 800,
+          letterSpacing: 3,
+          textTransform: 'uppercase',
+          color: '#c084fc',
         }}
       >
-        <div
-          style={{
-            height: 10,
-            borderRadius: 999,
-            background: 'linear-gradient(90deg, #f97316 0%, #c084fc 100%)',
-            marginBottom: 36,
-          }}
-        />
+        ReaganXS
+      </span>
+      <span
+        style={{
+          fontSize: 22,
+          fontWeight: 600,
+          color: 'rgba(255,255,255,0.5)',
+        }}
+      >
+        Processing Report
+      </span>
+    </div>
+    <span
+      style={{
+        padding: '6px 14px',
+        borderRadius: 999,
+        background: 'rgba(192,132,252,0.18)',
+        border: '1px solid rgba(192,132,252,0.4)',
+        fontSize: 16,
+        fontWeight: 700,
+        color: '#e9d5ff',
+      }}
+    >
+      {tierLabel}
+    </span>
+  </div>
 
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            gap: 24,
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 26,
-                letterSpacing: 8,
-                textTransform: 'uppercase',
-                color: '#c084fc',
-                fontWeight: 700,
-                fontFamily: FONT,
-              }}
-            >
-              ReaganXS
-            </p>
-            <p
-              style={{
-                margin: '8px 0 0',
-                fontSize: 44,
-                fontWeight: 800,
-                letterSpacing: -0.5,
-                color: '#ffffff',
-                fontFamily: FONT,
-              }}
-            >
-              Processing Report
-            </p>
-          </div>
-          <div
-            style={{
-              padding: '10px 22px',
-              borderRadius: 999,
-              background: 'rgba(192,132,252,0.18)',
-              border: '1px solid rgba(192,132,252,0.45)',
-              fontSize: 20,
-              fontWeight: 700,
-              letterSpacing: 1,
-              color: '#e9d5ff',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {tierLabel}
-          </div>
-        </div>
+  <div
+    style={{
+      height: 6,
+      borderRadius: 999,
+      background: 'linear-gradient(90deg, #f97316, #c084fc)',
+      marginBottom: 28,
+    }}
+  />
 
-        <div style={{ textAlign: 'center', margin: '48px 0 40px' }}>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 152,
-              fontWeight: 900,
-              lineHeight: 0.95,
-              letterSpacing: -4,
-              color: '#f97316',
-              fontFamily: FONT,
-            }}
-          >
-            {Math.round(savings)}%
-          </p>
-          <p
-            style={{
-              margin: '14px 0 0',
-              fontSize: 30,
-              fontWeight: 600,
-              letterSpacing: 2,
-              textTransform: 'uppercase',
-              color: '#c084fc',
-              fontFamily: FONT,
-            }}
-          >
-            bandwidth saved
-          </p>
-        </div>
+  {/* Savings + sizes in one band */}
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 28,
+      marginBottom: 24,
+    }}
+  >
+    <div style={{ flexShrink: 0, textAlign: 'left', minWidth: 220 }}>
+      <p
+        style={{
+          margin: 0,
+          fontSize: 96,
+          fontWeight: 900,
+          lineHeight: 1,
+          letterSpacing: -3,
+          color: '#f97316',
+        }}
+      >
+        {Math.round(savings)}%
+      </p>
+      <p
+        style={{
+          margin: '6px 0 0',
+          fontSize: 18,
+          fontWeight: 600,
+          letterSpacing: 1.5,
+          textTransform: 'uppercase',
+          color: '#c084fc',
+        }}
+      >
+        saved
+      </p>
+    </div>
 
-        <div style={{ display: 'flex', gap: 20, marginBottom: 36 }}>
-          <div
-            style={{
-              flex: 1,
-              background: '#2a211c',
-              borderRadius: 24,
-              padding: '28px 22px',
-              textAlign: 'center',
-              border: '1px solid rgba(255,255,255,0.12)',
-            }}
-          >
-            <p
-              style={{
-                margin: 0,
-                fontSize: 20,
-                letterSpacing: 1,
-                textTransform: 'uppercase',
-                color: 'rgba(255,255,255,0.45)',
-                fontFamily: FONT,
-              }}
-            >
-              Original
-            </p>
-            <p
-              style={{
-                margin: '10px 0 0',
-                fontSize: 38,
-                fontWeight: 700,
-                color: '#e9d5ff',
-                fontFamily: FONT_MONO,
-              }}
-            >
-              {formatBytes(orig)}
-            </p>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              background: '#2a211c',
-              borderRadius: 24,
-              padding: '28px 22px',
-              textAlign: 'center',
-              border: '1px solid rgba(249,115,22,0.5)',
-            }}
-          >
-            <p
-              style={{
-                margin: 0,
-                fontSize: 20,
-                letterSpacing: 1,
-                textTransform: 'uppercase',
-                color: 'rgba(255,255,255,0.45)',
-                fontFamily: FONT,
-              }}
-            >
-              After ReaganXS
-            </p>
-            <p
-              style={{
-                margin: '10px 0 0',
-                fontSize: 38,
-                fontWeight: 700,
-                color: '#fdba74',
-                fontFamily: FONT_MONO,
-              }}
-            >
-              {formatBytes(fin)}
-            </p>
-          </div>
-        </div>
-
-        {/* Full detail table */}
-        <div
-          style={{
-            background: '#241c18',
-            borderRadius: 24,
-            padding: '8px 32px',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}
-        >
-          {exportRows.map((row, i) => (
-            <div
-              key={row.label}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 32,
-                padding: '18px 0',
-                borderBottom:
-                  i < exportRows.length - 1
-                    ? '1px solid rgba(255,255,255,0.08)'
-                    : 'none',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 22,
-                  color: 'rgba(255,255,255,0.45)',
-                  fontWeight: 500,
-                  fontFamily: FONT,
-                  flexShrink: 0,
-                }}
-              >
-                {row.label}
-              </span>
-              <span
-                style={{
-                  fontSize: 22,
-                  color: '#f5f5f5',
-                  fontWeight: 600,
-                  textAlign: 'right',
-                  fontFamily: FONT,
-                  wordBreak: 'break-word',
-                }}
-              >
-                {row.value}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {restored && (
-          <p
-            style={{
-              margin: '28px 0 0',
-              textAlign: 'center',
-              fontSize: 22,
-              fontWeight: 600,
-              color: '#6ee7b7',
-              fontFamily: FONT,
-            }}
-          >
-            {job.restoreMode === 'partial-frames'
-              ? `Partial frame restore · ${frames.length} samples`
-              : 'Fully restored'}
-          </p>
-        )}
-
+    <div style={{ flex: 1, display: 'flex', gap: 12 }}>
+      <div
+        style={{
+          flex: 1,
+          background: '#2a211c',
+          borderRadius: 16,
+          padding: '16px 14px',
+          border: '1px solid rgba(255,255,255,0.1)',
+        }}
+      >
         <p
           style={{
-            margin: '36px 0 0',
-            textAlign: 'center',
-            fontSize: 20,
-            letterSpacing: 1.5,
-            color: 'rgba(255,255,255,0.38)',
-            fontFamily: FONT,
+            margin: 0,
+            fontSize: 14,
+            textTransform: 'uppercase',
+            letterSpacing: 1,
+            color: 'rgba(255,255,255,0.4)',
           }}
         >
-          compress first · restore selectively · reaganxs.com
+          Original
+        </p>
+        <p
+          style={{
+            margin: '4px 0 0',
+            fontSize: 26,
+            fontWeight: 700,
+            color: '#e9d5ff',
+            fontFamily: FONT_MONO,
+          }}
+        >
+          {formatBytes(orig)}
         </p>
       </div>
+      <div
+        style={{
+          flex: 1,
+          background: '#2a211c',
+          borderRadius: 16,
+          padding: '16px 14px',
+          border: '1px solid rgba(249,115,22,0.45)',
+        }}
+      >
+        <p
+          style={{
+            margin: 0,
+            fontSize: 14,
+            textTransform: 'uppercase',
+            letterSpacing: 1,
+            color: 'rgba(255,255,255,0.4)',
+          }}
+        >
+          After
+        </p>
+        <p
+          style={{
+            margin: '4px 0 0',
+            fontSize: 26,
+            fontWeight: 700,
+            color: '#fdba74',
+            fontFamily: FONT_MONO,
+          }}
+        >
+          {formatBytes(fin)}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {/* Dense detail grid — 2 columns */}
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '0 28px',
+      background: '#241c18',
+      borderRadius: 16,
+      padding: '6px 22px',
+      border: '1px solid rgba(255,255,255,0.1)',
+    }}
+  >
+    {exportRows.map((row, i) => (
+      <div
+        key={row.label}
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '11px 0',
+          borderBottom:
+            i < exportRows.length - 2
+              ? '1px solid rgba(255,255,255,0.07)'
+              : 'none',
+          gridColumn: exportRows.length % 2 === 1 && i === exportRows.length - 1
+            ? '1 / -1'
+            : undefined,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 16,
+            color: 'rgba(255,255,255,0.42)',
+            fontWeight: 500,
+            flexShrink: 0,
+          }}
+        >
+          {row.label}
+        </span>
+        <span
+          style={{
+            fontSize: 16,
+            color: '#f0f0f0',
+            fontWeight: 600,
+            textAlign: 'right',
+            wordBreak: 'break-word',
+          }}
+        >
+          {row.value}
+        </span>
+      </div>
+    ))}
+  </div>
+
+  {restored && (
+    <p
+      style={{
+        margin: '16px 0 0',
+        textAlign: 'center',
+        fontSize: 16,
+        fontWeight: 600,
+        color: '#6ee7b7',
+      }}
+    >
+      {job.restoreMode === 'partial-frames'
+        ? `Partial frame restore · ${frames.length} samples`
+        : 'Fully restored'}
+    </p>
+  )}
+
+  <p
+    style={{
+      margin: '14px 0 0',
+      textAlign: 'center',
+      fontSize: 14,
+      letterSpacing: 1,
+      color: 'rgba(255,255,255,0.32)',
+    }}
+  >
+    compress first · restore selectively · reaganxs.com
+  </p>
+</div>
     </div>
   );
 }
