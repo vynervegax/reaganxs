@@ -33,12 +33,18 @@ type Job = {
   platform?: string;
 };
 
-type Orient = 'portrait' | 'landscape';
+type ShareOrientation = 'portrait' | 'landscape';
+
+/** 4:5 feed · 16:9 landscape */
+const ORIENT = {
+  portrait: { width: 1080, height: 1350, label: '4:5' },
+  landscape: { width: 1920, height: 1080, label: '16:9' },
+} as const;
 
 const FONT =
-  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif';
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 const FONT_MONO =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
 
 function formatBytes(n?: number) {
   if (!n || n <= 0) return '—';
@@ -90,9 +96,9 @@ export default function SavingsCard({
   job: Job | null | undefined;
   isLoggedIn?: boolean;
 }) {
-  const exportPortraitRef = useRef<HTMLDivElement>(null);
-  const exportLandscapeRef = useRef<HTMLDivElement>(null);
-  const [exportOrient, setExportOrient] = useState<Orient>('portrait');
+  const portraitRef = useRef<HTMLDivElement>(null);
+  const landscapeRef = useRef<HTMLDivElement>(null);
+  const [orientation, setOrientation] = useState<ShareOrientation>('portrait');
   const [shareMsg, setShareMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -183,12 +189,9 @@ export default function SavingsCard({
 
   const captureCardPng = async (): Promise<File | null> => {
     const el =
-      exportOrient === 'landscape'
-        ? exportLandscapeRef.current
-        : exportPortraitRef.current;
+      orientation === 'portrait' ? portraitRef.current : landscapeRef.current;
     if (!el) return null;
-
-    const width = exportOrient === 'landscape' ? 1920 : 1080;
+    const { width } = ORIENT[orientation];
     const { default: html2canvas } = await import('html2canvas');
     const canvas = await html2canvas(el, {
       backgroundColor: '#1c140f',
@@ -205,11 +208,10 @@ export default function SavingsCard({
       canvas.toBlob((b) => resolve(b), 'image/png')
     );
     if (!blob) return null;
-    return new File(
-      [blob],
-      `reaganxs-report-${exportOrient}-${Date.now()}.png`,
-      { type: 'image/png' }
-    );
+    const suffix = orientation === 'portrait' ? '4x5' : '16x9';
+    return new File([blob], `reaganxs-report-${suffix}-${Date.now()}.png`, {
+      type: 'image/png',
+    });
   };
 
   const downloadFile = (file: File) => {
@@ -248,7 +250,7 @@ export default function SavingsCard({
             text: cardCaption,
             files: [file],
           });
-          setShareMsg(`Shared ${exportOrient} report`);
+          setShareMsg(`Shared savings card (${ORIENT[orientation].label})`);
           return;
         }
       } catch {
@@ -269,7 +271,7 @@ export default function SavingsCard({
           `&text=${encodeURIComponent(cardCaption)}`;
         window.open(redditUrl, '_blank', 'noopener,noreferrer');
         setShareMsg(
-          `${exportOrient === 'portrait' ? 'Vertical' : 'Horizontal'} PNG saved · attach on Reddit`
+          `Card ${ORIENT[orientation].label} saved · attach the PNG on Reddit`
         );
         return;
       }
@@ -280,7 +282,9 @@ export default function SavingsCard({
           '_blank',
           'noopener,noreferrer'
         );
-        setShareMsg('PNG saved · caption copied — paste & attach on LinkedIn');
+        setShareMsg(
+          `Card ${ORIENT[orientation].label} saved · caption copied — attach on LinkedIn`
+        );
         return;
       }
 
@@ -308,11 +312,13 @@ export default function SavingsCard({
             'noopener,noreferrer'
           );
         }
-        setShareMsg('PNG saved · caption copied — post on Instagram');
+        setShareMsg(
+          `Card ${ORIENT[orientation].label} saved · post the PNG on Instagram`
+        );
         return;
       }
 
-      setShareMsg('Report PNG saved · caption copied');
+      setShareMsg(`Card ${ORIENT[orientation].label} saved · caption copied`);
     } catch (e: any) {
       console.error(e);
       setShareMsg(e?.message || 'Share failed');
@@ -346,15 +352,269 @@ export default function SavingsCard({
     </div>
   );
 
-  const restoreBanner =
-    restored &&
-    (job.restoreMode === 'partial-frames'
-      ? `Partial frame restore · ${frames.length} samples`
-      : 'Fully restored');
+  /** Shared poster body — used by both orientations */
+  const PosterBody = ({
+    mode,
+  }: {
+    mode: ShareOrientation;
+  }) => {
+    const isPortrait = mode === 'portrait';
+    return (
+      <>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 16,
+            marginBottom: isPortrait ? 18 : 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+            <span
+              style={{
+                fontSize: isPortrait ? 26 : 24,
+                fontWeight: 800,
+                letterSpacing: 3,
+                textTransform: 'uppercase',
+                color: '#c084fc',
+              }}
+            >
+              ReaganXS
+            </span>
+            <span
+              style={{
+                fontSize: isPortrait ? 20 : 18,
+                fontWeight: 600,
+                color: 'rgba(255,255,255,0.5)',
+              }}
+            >
+              Processing Report
+            </span>
+          </div>
+          <span
+            style={{
+              padding: '5px 12px',
+              borderRadius: 999,
+              background: 'rgba(192,132,252,0.18)',
+              border: '1px solid rgba(192,132,252,0.4)',
+              fontSize: 15,
+              fontWeight: 700,
+              color: '#e9d5ff',
+            }}
+          >
+            {tierLabel}
+          </span>
+        </div>
+
+        <div
+          style={{
+            height: 5,
+            borderRadius: 999,
+            background: 'linear-gradient(90deg, #f97316, #c084fc)',
+            marginBottom: isPortrait ? 24 : 18,
+          }}
+        />
+
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: isPortrait ? 'column' : 'row',
+            alignItems: isPortrait ? 'stretch' : 'center',
+            gap: isPortrait ? 20 : 28,
+            marginBottom: isPortrait ? 20 : 16,
+          }}
+        >
+          <div
+            style={{
+              flexShrink: 0,
+              textAlign: isPortrait ? 'center' : 'left',
+              minWidth: isPortrait ? undefined : 200,
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                fontSize: isPortrait ? 100 : 88,
+                fontWeight: 900,
+                lineHeight: 1,
+                letterSpacing: -3,
+                color: '#f97316',
+              }}
+            >
+              {Math.round(savings)}%
+            </p>
+            <p
+              style={{
+                margin: '6px 0 0',
+                fontSize: 16,
+                fontWeight: 600,
+                letterSpacing: 1.5,
+                textTransform: 'uppercase',
+                color: '#c084fc',
+              }}
+            >
+              bandwidth saved
+            </p>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', gap: 10 }}>
+            <div
+              style={{
+                flex: 1,
+                background: '#2a211c',
+                borderRadius: 14,
+                padding: isPortrait ? '14px 12px' : '12px 14px',
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}
+            >
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 13,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: 'rgba(255,255,255,0.4)',
+                }}
+              >
+                Original
+              </p>
+              <p
+                style={{
+                  margin: '4px 0 0',
+                  fontSize: isPortrait ? 24 : 22,
+                  fontWeight: 700,
+                  color: '#e9d5ff',
+                  fontFamily: FONT_MONO,
+                }}
+              >
+                {formatBytes(orig)}
+              </p>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                background: '#2a211c',
+                borderRadius: 14,
+                padding: isPortrait ? '14px 12px' : '12px 14px',
+                border: '1px solid rgba(249,115,22,0.45)',
+              }}
+            >
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 13,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: 'rgba(255,255,255,0.4)',
+                }}
+              >
+                After
+              </p>
+              <p
+                style={{
+                  margin: '4px 0 0',
+                  fontSize: isPortrait ? 24 : 22,
+                  fontWeight: 700,
+                  color: '#fdba74',
+                  fontFamily: FONT_MONO,
+                }}
+              >
+                {formatBytes(fin)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '0 20px',
+            background: '#241c18',
+            borderRadius: 14,
+            padding: isPortrait ? '4px 18px' : '2px 20px',
+            border: '1px solid rgba(255,255,255,0.1)',
+            flex: isPortrait ? undefined : 1,
+          }}
+        >
+          {exportRows.map((row, i) => (
+            <div
+              key={row.label}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 10,
+                padding: isPortrait ? '10px 0' : '8px 0',
+                borderBottom:
+                  i < exportRows.length - 2
+                    ? '1px solid rgba(255,255,255,0.07)'
+                    : 'none',
+                gridColumn:
+                  exportRows.length % 2 === 1 && i === exportRows.length - 1
+                    ? '1 / -1'
+                    : undefined,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: isPortrait ? 15 : 14,
+                  color: 'rgba(255,255,255,0.42)',
+                  fontWeight: 500,
+                  flexShrink: 0,
+                }}
+              >
+                {row.label}
+              </span>
+              <span
+                style={{
+                  fontSize: isPortrait ? 15 : 14,
+                  color: '#f0f0f0',
+                  fontWeight: 600,
+                  textAlign: 'right',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {row.value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {restored && (
+          <p
+            style={{
+              margin: isPortrait ? '14px 0 0' : '10px 0 0',
+              textAlign: 'center',
+              fontSize: 14,
+              fontWeight: 600,
+              color: '#6ee7b7',
+            }}
+          >
+            {job.restoreMode === 'partial-frames'
+              ? `Partial frame restore · ${frames.length} samples`
+              : 'Fully restored'}
+          </p>
+        )}
+
+        <p
+          style={{
+            margin: isPortrait ? '12px 0 0' : '8px 0 0',
+            textAlign: 'center',
+            fontSize: 13,
+            letterSpacing: 1,
+            color: 'rgba(255,255,255,0.32)',
+          }}
+        >
+          compress first · restore selectively · reaganxs.com
+        </p>
+      </>
+    );
+  };
 
   return (
     <div className="space-y-3">
-      {/* —— Live web card —— */}
+      {/* Live web card */}
       <div
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: FONT }}
@@ -450,9 +710,11 @@ export default function SavingsCard({
           ))}
         </div>
 
-        {restoreBanner && (
+        {restored && (
           <p className="text-center text-xs text-emerald-400 mb-3">
-            {restoreBanner}
+            {job.restoreMode === 'partial-frames'
+              ? `Partial frame restore · ${frames.length} samples`
+              : 'Fully restored'}
           </p>
         )}
 
@@ -472,30 +734,30 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* Orientation + actions */}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-white/40 mr-1">Share layout</span>
+      {/* Share orientation */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-white/40 mr-1">Share size</span>
         <button
           type="button"
-          onClick={() => setExportOrient('portrait')}
-          className={`px-3 py-1.5 rounded-xl border text-sm transition ${
-            exportOrient === 'portrait'
+          onClick={() => setOrientation('portrait')}
+          className={`px-3 py-1.5 rounded-xl text-xs border transition ${
+            orientation === 'portrait'
               ? 'border-[#c084fc]/50 bg-[#c084fc]/15 text-[#c084fc]'
-              : 'border-white/15 bg-white/5 text-white/60'
+              : 'border-white/15 bg-white/5 text-white/60 hover:border-white/25'
           }`}
         >
-          Vertical
+          Vertical 4:5
         </button>
         <button
           type="button"
-          onClick={() => setExportOrient('landscape')}
-          className={`px-3 py-1.5 rounded-xl border text-sm transition ${
-            exportOrient === 'landscape'
+          onClick={() => setOrientation('landscape')}
+          className={`px-3 py-1.5 rounded-xl text-xs border transition ${
+            orientation === 'landscape'
               ? 'border-[#c084fc]/50 bg-[#c084fc]/15 text-[#c084fc]'
-              : 'border-white/15 bg-white/5 text-white/60'
+              : 'border-white/15 bg-white/5 text-white/60 hover:border-white/25'
           }`}
         >
-          Horizontal
+          Horizontal 16:9
         </button>
       </div>
 
@@ -545,497 +807,48 @@ export default function SavingsCard({
 
       {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
 
-      {/* —— Portrait export (1080) —— */}
+      {/* Portrait 4:5 — 1080×1350 */}
       <div
-        ref={exportPortraitRef}
+        ref={portraitRef}
         aria-hidden
         style={{
           position: 'fixed',
           left: -10000,
           top: 0,
-          width: 1080,
-          padding: '40px 44px 36px',
+          width: ORIENT.portrait.width,
+          height: ORIENT.portrait.height,
+          padding: '36px 40px',
           boxSizing: 'border-box',
           background: '#1c140f',
           color: '#ffffff',
           fontFamily: FONT,
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 16,
-            marginBottom: 20,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-            <span
-              style={{
-                fontSize: 28,
-                fontWeight: 800,
-                letterSpacing: 3,
-                textTransform: 'uppercase',
-                color: '#c084fc',
-              }}
-            >
-              ReaganXS
-            </span>
-            <span
-              style={{
-                fontSize: 22,
-                fontWeight: 600,
-                color: 'rgba(255,255,255,0.5)',
-              }}
-            >
-              Processing Report
-            </span>
-          </div>
-          <span
-            style={{
-              padding: '6px 14px',
-              borderRadius: 999,
-              background: 'rgba(192,132,252,0.18)',
-              border: '1px solid rgba(192,132,252,0.4)',
-              fontSize: 16,
-              fontWeight: 700,
-              color: '#e9d5ff',
-            }}
-          >
-            {tierLabel}
-          </span>
-        </div>
-
-        <div
-          style={{
-            height: 6,
-            borderRadius: 999,
-            background: 'linear-gradient(90deg, #f97316, #c084fc)',
-            marginBottom: 28,
-          }}
-        />
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 28,
-            marginBottom: 24,
-          }}
-        >
-          <div style={{ flexShrink: 0, minWidth: 220 }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 96,
-                fontWeight: 900,
-                lineHeight: 1,
-                letterSpacing: -3,
-                color: '#f97316',
-              }}
-            >
-              {Math.round(savings)}%
-            </p>
-            <p
-              style={{
-                margin: '6px 0 0',
-                fontSize: 18,
-                fontWeight: 600,
-                letterSpacing: 1.5,
-                textTransform: 'uppercase',
-                color: '#c084fc',
-              }}
-            >
-              saved
-            </p>
-          </div>
-          <div style={{ flex: 1, display: 'flex', gap: 12 }}>
-            <div
-              style={{
-                flex: 1,
-                background: '#2a211c',
-                borderRadius: 16,
-                padding: '16px 14px',
-                border: '1px solid rgba(255,255,255,0.1)',
-              }}
-            >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 14,
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  color: 'rgba(255,255,255,0.4)',
-                }}
-              >
-                Original
-              </p>
-              <p
-                style={{
-                  margin: '4px 0 0',
-                  fontSize: 26,
-                  fontWeight: 700,
-                  color: '#e9d5ff',
-                  fontFamily: FONT_MONO,
-                }}
-              >
-                {formatBytes(orig)}
-              </p>
-            </div>
-            <div
-              style={{
-                flex: 1,
-                background: '#2a211c',
-                borderRadius: 16,
-                padding: '16px 14px',
-                border: '1px solid rgba(249,115,22,0.45)',
-              }}
-            >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 14,
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  color: 'rgba(255,255,255,0.4)',
-                }}
-              >
-                After
-              </p>
-              <p
-                style={{
-                  margin: '4px 0 0',
-                  fontSize: 26,
-                  fontWeight: 700,
-                  color: '#fdba74',
-                  fontFamily: FONT_MONO,
-                }}
-              >
-                {formatBytes(fin)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '0 28px',
-            background: '#241c18',
-            borderRadius: 16,
-            padding: '6px 22px',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}
-        >
-          {exportRows.map((row, i) => (
-            <div
-              key={row.label}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 12,
-                padding: '11px 0',
-                borderBottom:
-                  i < exportRows.length - 2
-                    ? '1px solid rgba(255,255,255,0.07)'
-                    : 'none',
-                gridColumn:
-                  exportRows.length % 2 === 1 && i === exportRows.length - 1
-                    ? '1 / -1'
-                    : undefined,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 16,
-                  color: 'rgba(255,255,255,0.42)',
-                  fontWeight: 500,
-                  flexShrink: 0,
-                }}
-              >
-                {row.label}
-              </span>
-              <span
-                style={{
-                  fontSize: 16,
-                  color: '#f0f0f0',
-                  fontWeight: 600,
-                  textAlign: 'right',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {row.value}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {restoreBanner && (
-          <p
-            style={{
-              margin: '16px 0 0',
-              textAlign: 'center',
-              fontSize: 16,
-              fontWeight: 600,
-              color: '#6ee7b7',
-            }}
-          >
-            {restoreBanner}
-          </p>
-        )}
-
-        <p
-          style={{
-            margin: '14px 0 0',
-            textAlign: 'center',
-            fontSize: 14,
-            letterSpacing: 1,
-            color: 'rgba(255,255,255,0.32)',
-          }}
-        >
-          compress first · restore selectively · reaganxs.com
-        </p>
+        <PosterBody mode="portrait" />
       </div>
 
-      {/* —— Landscape export (1920) —— */}
+      {/* Landscape 16:9 — 1920×1080 */}
       <div
-        ref={exportLandscapeRef}
+        ref={landscapeRef}
         aria-hidden
         style={{
           position: 'fixed',
           left: -10000,
           top: 0,
-          width: 1920,
-          padding: '36px 48px',
+          width: ORIENT.landscape.width,
+          height: ORIENT.landscape.height,
+          padding: '32px 48px',
           boxSizing: 'border-box',
           background: '#1c140f',
-          color: '#fff',
+          color: '#ffffff',
           fontFamily: FONT,
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 20,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
-            <span
-              style={{
-                fontSize: 26,
-                fontWeight: 800,
-                letterSpacing: 4,
-                textTransform: 'uppercase',
-                color: '#c084fc',
-              }}
-            >
-              ReaganXS
-            </span>
-            <span style={{ fontSize: 20, color: 'rgba(255,255,255,0.45)' }}>
-              Processing Report
-            </span>
-          </div>
-          <span
-            style={{
-              padding: '6px 16px',
-              borderRadius: 999,
-              background: 'rgba(192,132,252,0.18)',
-              border: '1px solid rgba(192,132,252,0.4)',
-              fontSize: 16,
-              fontWeight: 700,
-              color: '#e9d5ff',
-            }}
-          >
-            {tierLabel}
-          </span>
-        </div>
-
-        <div
-          style={{
-            height: 5,
-            borderRadius: 999,
-            background: 'linear-gradient(90deg, #f97316, #c084fc)',
-            marginBottom: 24,
-          }}
-        />
-
-        <div style={{ display: 'flex', gap: 28, alignItems: 'stretch' }}>
-          <div style={{ width: 280, flexShrink: 0 }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 112,
-                fontWeight: 900,
-                lineHeight: 1,
-                letterSpacing: -3,
-                color: '#f97316',
-              }}
-            >
-              {Math.round(savings)}%
-            </p>
-            <p
-              style={{
-                margin: '8px 0 0',
-                fontSize: 18,
-                fontWeight: 600,
-                letterSpacing: 2,
-                textTransform: 'uppercase',
-                color: '#c084fc',
-              }}
-            >
-              bandwidth saved
-            </p>
-            {restoreBanner && (
-              <p
-                style={{
-                  margin: '16px 0 0',
-                  fontSize: 15,
-                  fontWeight: 600,
-                  color: '#6ee7b7',
-                }}
-              >
-                {restoreBanner}
-              </p>
-            )}
-          </div>
-
-          <div
-            style={{
-              width: 280,
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
-            }}
-          >
-            <div
-              style={{
-                flex: 1,
-                background: '#2a211c',
-                borderRadius: 14,
-                padding: '18px 16px',
-                border: '1px solid rgba(255,255,255,0.1)',
-              }}
-            >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 13,
-                  textTransform: 'uppercase',
-                  color: 'rgba(255,255,255,0.4)',
-                }}
-              >
-                Original
-              </p>
-              <p
-                style={{
-                  margin: '6px 0 0',
-                  fontSize: 28,
-                  fontWeight: 700,
-                  color: '#e9d5ff',
-                  fontFamily: FONT_MONO,
-                }}
-              >
-                {formatBytes(orig)}
-              </p>
-            </div>
-            <div
-              style={{
-                flex: 1,
-                background: '#2a211c',
-                borderRadius: 14,
-                padding: '18px 16px',
-                border: '1px solid rgba(249,115,22,0.45)',
-              }}
-            >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 13,
-                  textTransform: 'uppercase',
-                  color: 'rgba(255,255,255,0.4)',
-                }}
-              >
-                After
-              </p>
-              <p
-                style={{
-                  margin: '6px 0 0',
-                  fontSize: 28,
-                  fontWeight: 700,
-                  color: '#fdba74',
-                  fontFamily: FONT_MONO,
-                }}
-              >
-                {formatBytes(fin)}
-              </p>
-            </div>
-          </div>
-
-          <div
-            style={{
-              flex: 1,
-              background: '#241c18',
-              borderRadius: 14,
-              padding: '4px 20px',
-              border: '1px solid rgba(255,255,255,0.1)',
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '0 24px',
-              alignContent: 'center',
-            }}
-          >
-            {exportRows.map((row) => (
-              <div
-                key={row.label}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '8px 0',
-                  borderBottom: '1px solid rgba(255,255,255,0.06)',
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 14,
-                    color: 'rgba(255,255,255,0.42)',
-                    flexShrink: 0,
-                  }}
-                >
-                  {row.label}
-                </span>
-                <span
-                  style={{
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: '#f0f0f0',
-                    textAlign: 'right',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {row.value}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <p
-          style={{
-            margin: '18px 0 0',
-            textAlign: 'center',
-            fontSize: 13,
-            letterSpacing: 1.2,
-            color: 'rgba(255,255,255,0.32)',
-          }}
-        >
-          compress first · restore selectively · reaganxs.com
-        </p>
+        <PosterBody mode="landscape" />
       </div>
     </div>
   );
