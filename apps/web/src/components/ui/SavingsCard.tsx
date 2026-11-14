@@ -83,7 +83,7 @@ export default function SavingsCard({
   job: Job | null | undefined;
   isLoggedIn?: boolean;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
   const [shareMsg, setShareMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -122,37 +122,44 @@ export default function SavingsCard({
     .filter(Boolean)
     .join(' · ');
 
-  /** Caption for the CARD report (not the video) */
+  const tierLabel = job.tier
+    ? String(job.tier).toUpperCase()
+    : isLoggedIn
+      ? 'ACCOUNT'
+      : 'DEMO';
+
+  const shareTitle = `ReaganXS — ${Math.round(savings)}% bandwidth saved`;
   const cardCaption = [
     'ReaganXS Processing Report',
     `Saved ${Math.round(savings)}% · ${formatBytes(orig)} → ${formatBytes(fin)}`,
     restored ? `Model: ${label}` : 'Compression only',
     vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
-    job.platform ? `Platform: ${job.platform}` : null,
+    `Platform: ${job.platform || 'Web'}`,
   ]
     .filter(Boolean)
     .join('\n');
 
-  const shareTitle = `ReaganXS — ${Math.round(savings)}% bandwidth saved`;
-
+  /** Capture the dedicated 1080px poster (not the live UI card) */
   const captureCardPng = async (): Promise<File | null> => {
-    const el = cardRef.current;
+    const el = exportRef.current;
     if (!el) return null;
     const { default: html2canvas } = await import('html2canvas');
     const canvas = await html2canvas(el, {
-  backgroundColor: '#1c140f',
-  scale: 3,              // was 2 — sharper export
-  useCORS: true,
-  allowTaint: false,
-  logging: false,
-  imageTimeout: 8000,
-  foreignObjectRendering: false, // often more reliable than true
-});
+      backgroundColor: '#1c140f',
+      scale: 2,
+      width: 1080,
+      windowWidth: 1080,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      foreignObjectRendering: false,
+      imageTimeout: 8000,
+    });
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob((b) => resolve(b), 'image/png')
     );
     if (!blob) return null;
-    return new File([blob], `reaganxs-savings-${Date.now()}.png`, {
+    return new File([blob], `reaganxs-report-${Date.now()}.png`, {
       type: 'image/png',
     });
   };
@@ -166,10 +173,6 @@ export default function SavingsCard({
     URL.revokeObjectURL(url);
   };
 
-  /**
-   * Share the savings CARD image + caption.
-   * Does not share the processed video as the primary asset.
-   */
   const shareCardTo = async (
     platform: 'reddit' | 'linkedin' | 'instagram' | 'native'
   ) => {
@@ -182,22 +185,28 @@ export default function SavingsCard({
         return;
       }
 
-      // Mobile / supporting browsers: share the card PNG itself
-      if (
-        typeof navigator !== 'undefined' &&
-        navigator.share &&
-        navigator.canShare?.({ files: [file] })
-      ) {
-        await navigator.share({
-          title: shareTitle,
-          text: cardCaption,
-          files: [file],
-        });
-        setShareMsg('Shared savings card');
-        return;
+      try {
+        if (
+          typeof navigator !== 'undefined' &&
+          typeof navigator.share === 'function' &&
+          navigator.canShare?.({
+            files: [file],
+            title: shareTitle,
+            text: cardCaption,
+          })
+        ) {
+          await navigator.share({
+            title: shareTitle,
+            text: cardCaption,
+            files: [file],
+          });
+          setShareMsg('Shared savings card');
+          return;
+        }
+      } catch {
+        /* fall through */
       }
 
-      // Desktop fallback: download card image + copy caption + open network
       downloadFile(file);
       try {
         await navigator.clipboard.writeText(cardCaption);
@@ -206,26 +215,45 @@ export default function SavingsCard({
       }
 
       if (platform === 'reddit') {
+        const redditUrl =
+          `https://www.reddit.com/submit?selftext=true` +
+          `&title=${encodeURIComponent(shareTitle)}` +
+          `&text=${encodeURIComponent(cardCaption)}`;
+        window.open(redditUrl, '_blank', 'noopener,noreferrer');
+        setShareMsg(
+          'Card PNG saved · caption filled — attach the image on Reddit'
+        );
+        return;
+      }
+
+      if (platform === 'linkedin') {
         window.open(
-          'https://www.reddit.com/submit?selftext=true',
+          'https://www.linkedin.com/feed/?shareActive=true',
           '_blank',
           'noopener,noreferrer'
         );
         setShareMsg(
-          'Card image saved · caption copied — attach the PNG on Reddit'
+          'Card PNG saved · caption copied — paste & attach on LinkedIn'
         );
-      } else if (platform === 'linkedin') {
-        window.open(
-          'https://www.linkedin.com/feed/',
-          '_blank',
-          'noopener,noreferrer'
-        );
-        setShareMsg(
-          'Card image saved · caption copied — attach the PNG on LinkedIn'
-        );
-      } else if (platform === 'instagram') {
+        return;
+      }
+
+      if (platform === 'instagram') {
         const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         if (mobile) {
+          try {
+            if (navigator.share) {
+              await navigator.share({
+                title: shareTitle,
+                text: cardCaption,
+                files: [file],
+              });
+              setShareMsg('Shared savings card');
+              return;
+            }
+          } catch {
+            /* ignore */
+          }
           window.location.href = 'instagram://app';
         } else {
           window.open(
@@ -235,19 +263,20 @@ export default function SavingsCard({
           );
         }
         setShareMsg(
-          'Card image saved · caption copied — post the PNG to Instagram'
+          'Card PNG saved · caption copied — post the image on Instagram'
         );
-      } else {
-        setShareMsg('Card image saved · caption copied');
+        return;
       }
-    } catch {
-      setShareMsg('Share cancelled');
+
+      setShareMsg('Card PNG saved · caption copied');
+    } catch (e: any) {
+      console.error(e);
+      setShareMsg(e?.message || 'Share failed');
     } finally {
       setBusy(false);
     }
   };
 
-  /** Processed media only — separate from card share */
   const onDownloadVideo = () => {
     if (!job.url) return;
     const a = document.createElement('a');
@@ -275,9 +304,8 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
-      {/* Exportable report only — buttons stay outside */}
+      {/* ========== Live web card (on-screen UX) ========== */}
       <div
-        ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
@@ -375,16 +403,7 @@ export default function SavingsCard({
             label="VMAF"
             value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'}
           />
-          <InfoRow
-            label="Tier"
-            value={
-              job.tier
-                ? String(job.tier).toUpperCase()
-                : isLoggedIn
-                  ? 'ACCOUNT'
-                  : 'DEMO'
-            }
-          />
+          <InfoRow label="Tier" value={tierLabel} />
           <InfoRow label="Platform" value={job.platform || 'Web'} />
           <InfoRow label="Started" value={formatDate(started)} />
           <InfoRow label="Completed" value={formatDate(finished)} />
@@ -425,7 +444,7 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* Actions — outside cardRef so they are not in the shared image */}
+      {/* ========== Actions (outside export) ========== */}
       <div className="flex flex-wrap gap-2.5">
         {job.url && (
           <button
@@ -436,7 +455,6 @@ export default function SavingsCard({
             Download video
           </button>
         )}
-
         <button
           type="button"
           disabled={busy}
@@ -445,7 +463,6 @@ export default function SavingsCard({
         >
           {busy ? '…' : 'Reddit'}
         </button>
-
         <button
           type="button"
           disabled={busy}
@@ -454,7 +471,6 @@ export default function SavingsCard({
         >
           LinkedIn
         </button>
-
         <button
           type="button"
           disabled={busy}
@@ -463,7 +479,6 @@ export default function SavingsCard({
         >
           Instagram
         </button>
-
         <button
           type="button"
           disabled={busy}
@@ -475,6 +490,216 @@ export default function SavingsCard({
       </div>
 
       {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
+
+      {/* ========== Hidden social poster (1080px, capture-friendly) ========== */}
+      <div
+        ref={exportRef}
+        aria-hidden
+        style={{
+          position: 'fixed',
+          left: -10000,
+          top: 0,
+          width: 1080,
+          padding: 64,
+          boxSizing: 'border-box',
+          background: '#1c140f',
+          color: '#ffffff',
+          fontFamily:
+            'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+        }}
+      >
+        <div
+          style={{
+            height: 12,
+            borderRadius: 8,
+            background: 'linear-gradient(90deg, #f97316, #c084fc)',
+            marginBottom: 40,
+          }}
+        />
+
+        <p
+          style={{
+            margin: 0,
+            fontSize: 28,
+            letterSpacing: 6,
+            textTransform: 'uppercase',
+            color: '#c084fc',
+            fontWeight: 700,
+          }}
+        >
+          ReaganXS
+        </p>
+        <p
+          style={{
+            margin: '10px 0 0',
+            fontSize: 48,
+            fontWeight: 800,
+            color: '#ffffff',
+          }}
+        >
+          Processing Report
+        </p>
+
+        <div
+          style={{
+            display: 'inline-block',
+            marginTop: 20,
+            padding: '8px 20px',
+            borderRadius: 999,
+            background: 'rgba(192,132,252,0.15)',
+            border: '1px solid rgba(192,132,252,0.4)',
+            fontSize: 22,
+            fontWeight: 600,
+            color: '#e9d5ff',
+          }}
+        >
+          {tierLabel}
+        </div>
+
+        <div style={{ textAlign: 'center', margin: '56px 0 48px' }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 168,
+              fontWeight: 900,
+              lineHeight: 1,
+              color: '#f97316',
+            }}
+          >
+            {Math.round(savings)}%
+          </p>
+          <p
+            style={{
+              margin: '16px 0 0',
+              fontSize: 34,
+              fontWeight: 600,
+              color: '#c084fc',
+            }}
+          >
+            bandwidth saved
+          </p>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            gap: 24,
+            marginBottom: 48,
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              background: '#2a211c',
+              borderRadius: 28,
+              padding: '32px 24px',
+              textAlign: 'center',
+              border: '1px solid rgba(255,255,255,0.12)',
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                fontSize: 24,
+                color: 'rgba(255,255,255,0.45)',
+              }}
+            >
+              Original
+            </p>
+            <p
+              style={{
+                margin: '12px 0 0',
+                fontSize: 40,
+                fontWeight: 700,
+                color: '#e9d5ff',
+              }}
+            >
+              {formatBytes(orig)}
+            </p>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              background: '#2a211c',
+              borderRadius: 28,
+              padding: '32px 24px',
+              textAlign: 'center',
+              border: '1px solid rgba(249,115,22,0.45)',
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                fontSize: 24,
+                color: 'rgba(255,255,255,0.45)',
+              }}
+            >
+              After ReaganXS
+            </p>
+            <p
+              style={{
+                margin: '12px 0 0',
+                fontSize: 40,
+                fontWeight: 700,
+                color: '#fdba74',
+              }}
+            >
+              {formatBytes(fin)}
+            </p>
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: '#241c18',
+            borderRadius: 28,
+            padding: 36,
+            border: '1px solid rgba(255,255,255,0.1)',
+            fontSize: 28,
+            lineHeight: 1.7,
+            color: 'rgba(255,255,255,0.9)',
+          }}
+        >
+          <div>
+            <span style={{ color: 'rgba(255,255,255,0.45)' }}>Model · </span>
+            {restored ? label : 'Compression only'}
+          </div>
+          <div>
+            <span style={{ color: 'rgba(255,255,255,0.45)' }}>Codec · </span>
+            {(job.codec || 'SVT-AV1 / VP9').toUpperCase()}
+          </div>
+          {vmaf != null && (
+            <div>
+              <span style={{ color: 'rgba(255,255,255,0.45)' }}>VMAF · </span>
+              {vmaf.toFixed(1)}
+            </div>
+          )}
+          <div>
+            <span style={{ color: 'rgba(255,255,255,0.45)' }}>
+              Platform ·{' '}
+            </span>
+            {job.platform || 'Web'}
+          </div>
+          {durationMs ? (
+            <div>
+              <span style={{ color: 'rgba(255,255,255,0.45)' }}>Time · </span>
+              {formatDuration(durationMs)}
+            </div>
+          ) : null}
+        </div>
+
+        <p
+          style={{
+            margin: '48px 0 0',
+            textAlign: 'center',
+            fontSize: 24,
+            color: 'rgba(255,255,255,0.4)',
+            letterSpacing: 1,
+          }}
+        >
+          compress first · restore selectively · reaganxs.com
+        </p>
+      </div>
     </div>
   );
 }
