@@ -68,13 +68,19 @@ function expiryLabel(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
       const d = new Date(expiresAt);
       const hours = Math.round((d.getTime() - Date.now()) / 36e5);
       if (hours > 0 && hours < 120) return `${hours} hours left`;
-      return d.toLocaleDateString();
+      return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
     } catch {
       /* fall through */
     }
   }
   return isLoggedIn ? 'Per plan' : 'Demo window';
 }
+
+/** Capture-safe font stack (no external font dependency) */
+const FONT =
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif';
+const FONT_MONO =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
 
 export default function SavingsCard({
   job,
@@ -128,6 +134,9 @@ export default function SavingsCard({
       ? 'ACCOUNT'
       : 'DEMO';
 
+  const restoreModeLabel =
+    job.restoreMode || (restored ? 'full' : 'none');
+
   const shareTitle = `ReaganXS — ${Math.round(savings)}% bandwidth saved`;
   const cardCaption = [
     'ReaganXS Processing Report',
@@ -139,7 +148,38 @@ export default function SavingsCard({
     .filter(Boolean)
     .join('\n');
 
-  /** Capture the dedicated 1080px poster (not the live UI card) */
+  /** All rows for export poster */
+  const exportRows: { label: string; value: string }[] = [
+    { label: 'Compression', value: compressLine || '—' },
+    { label: 'Model', value: restored ? label : 'None' },
+    { label: 'Restore mode', value: String(restoreModeLabel) },
+    {
+      label: 'VMAF',
+      value: vmaf != null ? vmaf.toFixed(2) : 'Not measured',
+    },
+    { label: 'Tier', value: tierLabel },
+    { label: 'Platform', value: job.platform || 'Web' },
+    { label: 'Started', value: formatDate(started) },
+    { label: 'Completed', value: formatDate(finished) },
+    { label: 'Processing time', value: formatDuration(durationMs) },
+    { label: 'Expires', value: expiryLabel(job.expiresAt, isLoggedIn) },
+  ];
+  if (job.codec) {
+    exportRows.push({ label: 'Codec', value: job.codec.toUpperCase() });
+  }
+  if (job.crf != null) {
+    exportRows.push({ label: 'CRF', value: String(job.crf) });
+  }
+  if (job.preset != null) {
+    exportRows.push({ label: 'Preset', value: String(job.preset) });
+  }
+  if (job.restoreSkippedReason || job.reason) {
+    exportRows.push({
+      label: 'Restore note',
+      value: String(job.restoreSkippedReason || job.reason),
+    });
+  }
+
   const captureCardPng = async (): Promise<File | null> => {
     const el = exportRef.current;
     if (!el) return null;
@@ -304,10 +344,10 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
-      {/* ========== Live web card (on-screen UX) ========== */}
+      {/* Live web card */}
       <div
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
-        style={{ fontFamily: 'system-ui, sans-serif' }}
+        style={{ fontFamily: FONT }}
       >
         <div className="text-center mb-6">
           <p
@@ -321,7 +361,9 @@ export default function SavingsCard({
           >
             ReaganXS
           </p>
-          <p className="text-sm text-white/50 mt-1">Processing Report</p>
+          <p className="text-sm text-white/50 mt-1 tracking-wide">
+            Processing Report
+          </p>
         </div>
 
         <div className="flex justify-center mb-6">
@@ -393,31 +435,9 @@ export default function SavingsCard({
         </div>
 
         <div className="rounded-2xl bg-white/[0.03] border border-white/10 px-4 py-2 mb-4">
-          <InfoRow label="Compression" value={compressLine || '—'} />
-          <InfoRow label="Model" value={restored ? label : 'None'} />
-          <InfoRow
-            label="Restore mode"
-            value={job.restoreMode || (restored ? 'full' : 'none')}
-          />
-          <InfoRow
-            label="VMAF"
-            value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'}
-          />
-          <InfoRow label="Tier" value={tierLabel} />
-          <InfoRow label="Platform" value={job.platform || 'Web'} />
-          <InfoRow label="Started" value={formatDate(started)} />
-          <InfoRow label="Completed" value={formatDate(finished)} />
-          <InfoRow label="Processing time" value={formatDuration(durationMs)} />
-          <InfoRow
-            label="Expires"
-            value={expiryLabel(job.expiresAt, isLoggedIn)}
-          />
-          {job.codec && (
-            <InfoRow label="Codec" value={job.codec.toUpperCase()} />
-          )}
-          {job.restoreSkippedReason && (
-            <InfoRow label="Restore note" value={job.restoreSkippedReason} />
-          )}
+          {exportRows.map((row) => (
+            <InfoRow key={row.label} label={row.label} value={row.value} />
+          ))}
         </div>
 
         {restored && (
@@ -444,7 +464,6 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* ========== Actions (outside export) ========== */}
       <div className="flex flex-wrap gap-2.5">
         {job.url && (
           <button
@@ -491,7 +510,7 @@ export default function SavingsCard({
 
       {shareMsg && <p className="text-xs text-white/40">{shareMsg}</p>}
 
-      {/* ========== Hidden social poster (1080px, capture-friendly) ========== */}
+      {/* Export poster — full info + nicer type for PNG */}
       <div
         ref={exportRef}
         aria-hidden
@@ -500,99 +519,110 @@ export default function SavingsCard({
           left: -10000,
           top: 0,
           width: 1080,
-          padding: 64,
+          padding: 56,
           boxSizing: 'border-box',
           background: '#1c140f',
           color: '#ffffff',
-          fontFamily:
-            'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+          fontFamily: FONT,
         }}
       >
         <div
           style={{
-            height: 12,
-            borderRadius: 8,
-            background: 'linear-gradient(90deg, #f97316, #c084fc)',
-            marginBottom: 40,
+            height: 10,
+            borderRadius: 999,
+            background: 'linear-gradient(90deg, #f97316 0%, #c084fc 100%)',
+            marginBottom: 36,
           }}
         />
 
-        <p
-          style={{
-            margin: 0,
-            fontSize: 28,
-            letterSpacing: 6,
-            textTransform: 'uppercase',
-            color: '#c084fc',
-            fontWeight: 700,
-          }}
-        >
-          ReaganXS
-        </p>
-        <p
-          style={{
-            margin: '10px 0 0',
-            fontSize: 48,
-            fontWeight: 800,
-            color: '#ffffff',
-          }}
-        >
-          Processing Report
-        </p>
-
         <div
           style={{
-            display: 'inline-block',
-            marginTop: 20,
-            padding: '8px 20px',
-            borderRadius: 999,
-            background: 'rgba(192,132,252,0.15)',
-            border: '1px solid rgba(192,132,252,0.4)',
-            fontSize: 22,
-            fontWeight: 600,
-            color: '#e9d5ff',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 24,
           }}
         >
-          {tierLabel}
+          <div>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 26,
+                letterSpacing: 8,
+                textTransform: 'uppercase',
+                color: '#c084fc',
+                fontWeight: 700,
+                fontFamily: FONT,
+              }}
+            >
+              ReaganXS
+            </p>
+            <p
+              style={{
+                margin: '8px 0 0',
+                fontSize: 44,
+                fontWeight: 800,
+                letterSpacing: -0.5,
+                color: '#ffffff',
+                fontFamily: FONT,
+              }}
+            >
+              Processing Report
+            </p>
+          </div>
+          <div
+            style={{
+              padding: '10px 22px',
+              borderRadius: 999,
+              background: 'rgba(192,132,252,0.18)',
+              border: '1px solid rgba(192,132,252,0.45)',
+              fontSize: 20,
+              fontWeight: 700,
+              letterSpacing: 1,
+              color: '#e9d5ff',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {tierLabel}
+          </div>
         </div>
 
-        <div style={{ textAlign: 'center', margin: '56px 0 48px' }}>
+        <div style={{ textAlign: 'center', margin: '48px 0 40px' }}>
           <p
             style={{
               margin: 0,
-              fontSize: 168,
+              fontSize: 152,
               fontWeight: 900,
-              lineHeight: 1,
+              lineHeight: 0.95,
+              letterSpacing: -4,
               color: '#f97316',
+              fontFamily: FONT,
             }}
           >
             {Math.round(savings)}%
           </p>
           <p
             style={{
-              margin: '16px 0 0',
-              fontSize: 34,
+              margin: '14px 0 0',
+              fontSize: 30,
               fontWeight: 600,
+              letterSpacing: 2,
+              textTransform: 'uppercase',
               color: '#c084fc',
+              fontFamily: FONT,
             }}
           >
             bandwidth saved
           </p>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            gap: 24,
-            marginBottom: 48,
-          }}
-        >
+        <div style={{ display: 'flex', gap: 20, marginBottom: 36 }}>
           <div
             style={{
               flex: 1,
               background: '#2a211c',
-              borderRadius: 28,
-              padding: '32px 24px',
+              borderRadius: 24,
+              padding: '28px 22px',
               textAlign: 'center',
               border: '1px solid rgba(255,255,255,0.12)',
             }}
@@ -600,18 +630,22 @@ export default function SavingsCard({
             <p
               style={{
                 margin: 0,
-                fontSize: 24,
+                fontSize: 20,
+                letterSpacing: 1,
+                textTransform: 'uppercase',
                 color: 'rgba(255,255,255,0.45)',
+                fontFamily: FONT,
               }}
             >
               Original
             </p>
             <p
               style={{
-                margin: '12px 0 0',
-                fontSize: 40,
+                margin: '10px 0 0',
+                fontSize: 38,
                 fontWeight: 700,
                 color: '#e9d5ff',
+                fontFamily: FONT_MONO,
               }}
             >
               {formatBytes(orig)}
@@ -621,27 +655,31 @@ export default function SavingsCard({
             style={{
               flex: 1,
               background: '#2a211c',
-              borderRadius: 28,
-              padding: '32px 24px',
+              borderRadius: 24,
+              padding: '28px 22px',
               textAlign: 'center',
-              border: '1px solid rgba(249,115,22,0.45)',
+              border: '1px solid rgba(249,115,22,0.5)',
             }}
           >
             <p
               style={{
                 margin: 0,
-                fontSize: 24,
+                fontSize: 20,
+                letterSpacing: 1,
+                textTransform: 'uppercase',
                 color: 'rgba(255,255,255,0.45)',
+                fontFamily: FONT,
               }}
             >
               After ReaganXS
             </p>
             <p
               style={{
-                margin: '12px 0 0',
-                fontSize: 40,
+                margin: '10px 0 0',
+                fontSize: 38,
                 fontWeight: 700,
                 color: '#fdba74',
+                fontFamily: FONT_MONO,
               }}
             >
               {formatBytes(fin)}
@@ -649,52 +687,81 @@ export default function SavingsCard({
           </div>
         </div>
 
+        {/* Full detail table */}
         <div
           style={{
             background: '#241c18',
-            borderRadius: 28,
-            padding: 36,
+            borderRadius: 24,
+            padding: '8px 32px',
             border: '1px solid rgba(255,255,255,0.1)',
-            fontSize: 28,
-            lineHeight: 1.7,
-            color: 'rgba(255,255,255,0.9)',
           }}
         >
-          <div>
-            <span style={{ color: 'rgba(255,255,255,0.45)' }}>Model · </span>
-            {restored ? label : 'Compression only'}
-          </div>
-          <div>
-            <span style={{ color: 'rgba(255,255,255,0.45)' }}>Codec · </span>
-            {(job.codec || 'SVT-AV1 / VP9').toUpperCase()}
-          </div>
-          {vmaf != null && (
-            <div>
-              <span style={{ color: 'rgba(255,255,255,0.45)' }}>VMAF · </span>
-              {vmaf.toFixed(1)}
+          {exportRows.map((row, i) => (
+            <div
+              key={row.label}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 32,
+                padding: '18px 0',
+                borderBottom:
+                  i < exportRows.length - 1
+                    ? '1px solid rgba(255,255,255,0.08)'
+                    : 'none',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 22,
+                  color: 'rgba(255,255,255,0.45)',
+                  fontWeight: 500,
+                  fontFamily: FONT,
+                  flexShrink: 0,
+                }}
+              >
+                {row.label}
+              </span>
+              <span
+                style={{
+                  fontSize: 22,
+                  color: '#f5f5f5',
+                  fontWeight: 600,
+                  textAlign: 'right',
+                  fontFamily: FONT,
+                  wordBreak: 'break-word',
+                }}
+              >
+                {row.value}
+              </span>
             </div>
-          )}
-          <div>
-            <span style={{ color: 'rgba(255,255,255,0.45)' }}>
-              Platform ·{' '}
-            </span>
-            {job.platform || 'Web'}
-          </div>
-          {durationMs ? (
-            <div>
-              <span style={{ color: 'rgba(255,255,255,0.45)' }}>Time · </span>
-              {formatDuration(durationMs)}
-            </div>
-          ) : null}
+          ))}
         </div>
+
+        {restored && (
+          <p
+            style={{
+              margin: '28px 0 0',
+              textAlign: 'center',
+              fontSize: 22,
+              fontWeight: 600,
+              color: '#6ee7b7',
+              fontFamily: FONT,
+            }}
+          >
+            {job.restoreMode === 'partial-frames'
+              ? `Partial frame restore · ${frames.length} samples`
+              : 'Fully restored'}
+          </p>
+        )}
 
         <p
           style={{
-            margin: '48px 0 0',
+            margin: '36px 0 0',
             textAlign: 'center',
-            fontSize: 24,
-            color: 'rgba(255,255,255,0.4)',
-            letterSpacing: 1,
+            fontSize: 20,
+            letterSpacing: 1.5,
+            color: 'rgba(255,255,255,0.38)',
+            fontFamily: FONT,
           }}
         >
           compress first · restore selectively · reaganxs.com
