@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { MODEL_LABELS } from '@/lib/clientRouter';
 
 type Job = {
@@ -67,11 +67,13 @@ function expiryLabel(expiresAt?: string | Date | null, isLoggedIn?: boolean) {
     try {
       const d = new Date(expiresAt);
       const hours = Math.round((d.getTime() - Date.now()) / 36e5);
-      if (hours > 0 && hours < 120) return `${hours} hours`;
+      if (hours > 0 && hours < 120) return `${hours} hours left`;
       return d.toLocaleDateString();
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
-  return isLoggedIn ? '48 hours' : '6 hours';
+  return isLoggedIn ? 'Per plan' : 'Demo window';
 }
 
 export default function SavingsCard({
@@ -101,16 +103,22 @@ export default function SavingsCard({
   const origPct = (orig / maxSize) * 100;
   const finPct = (fin / maxSize) * 100;
 
-  // Time fields — check common variants from history/process payloads
   const started = job.createdAt || job.startedAt || null;
   const finished = job.completedAt || job.finishedAt || null;
-  const durationMs = job.processingTimeMs || job.durationMs || null;
+  let durationMs = job.processingTimeMs || job.durationMs || undefined;
+  if (!durationMs && started && finished) {
+    const a = new Date(started).getTime();
+    const b = new Date(finished).getTime();
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) durationMs = b - a;
+  }
 
   const compressLine = [
-    job.codec ? job.codec.toUpperCase() : 'SVT-AV1',
-    job.crf != null ? `CRF ${job.crf}` : 'CRF 28',
-    job.preset != null ? `Preset ${job.preset}` : 'Preset 6',
-  ].join(' · ');
+    job.codec ? job.codec.toUpperCase() : 'SVT-AV1 / VP9',
+    job.crf != null ? `CRF ${job.crf}` : null,
+    job.preset != null ? `Preset ${job.preset}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   const shareText = [
     `ReaganXS · saved ${savings}%`,
@@ -147,19 +155,18 @@ export default function SavingsCard({
 
   const onShareLinkedIn = () => {
     const target = job.url || window.location.href;
-    const url = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(target)}`;
-    openShare(url);
+    openShare(
+      `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(target)}`
+    );
   };
 
   const onShareInstagram = async () => {
-    // Instagram has no reliable web share URL — copy text and open app/web
     try {
       await navigator.clipboard.writeText(shareText);
       setShareMsg('Caption copied — paste it in Instagram');
     } catch {
       setShareMsg('Could not copy caption');
     }
-    // Try to open Instagram
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     if (isMobile) {
       window.location.href = 'instagram://app';
@@ -208,7 +215,6 @@ export default function SavingsCard({
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
-        {/* Brand header */}
         <div className="text-center mb-6">
           <p
             className="text-3xl font-bold tracking-tight"
@@ -224,7 +230,6 @@ export default function SavingsCard({
           <p className="text-sm text-white/50 mt-1">Processing Report</p>
         </div>
 
-        {/* Savings hero */}
         <div className="flex justify-center mb-6">
           <div
             className="relative flex items-center justify-center"
@@ -255,7 +260,6 @@ export default function SavingsCard({
           </div>
         </div>
 
-        {/* Size comparison */}
         <div className="mb-6">
           <div className="flex justify-between text-xs text-white/40 mb-2">
             <span>Original</span>
@@ -272,7 +276,9 @@ export default function SavingsCard({
                   }}
                 />
               </div>
-              <p className="text-xs text-white/70 mt-1 text-center">{formatBytes(orig)}</p>
+              <p className="text-xs text-white/70 mt-1 text-center">
+                {formatBytes(orig)}
+              </p>
             </div>
             <span className="text-white/30 text-xs">→</span>
             <div className="flex-1">
@@ -285,24 +291,45 @@ export default function SavingsCard({
                   }}
                 />
               </div>
-              <p className="text-xs text-white/70 mt-1 text-center">{formatBytes(fin)}</p>
+              <p className="text-xs text-white/70 mt-1 text-center">
+                {formatBytes(fin)}
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Full details */}
         <div className="rounded-2xl bg-white/[0.03] border border-white/10 px-4 py-2 mb-4">
-          <InfoRow label="Compression" value={compressLine} />
+          <InfoRow label="Compression" value={compressLine || '—'} />
           <InfoRow label="Model" value={restored ? label : 'None'} />
-          <InfoRow label="Restore mode" value={job.restoreMode || (restored ? 'full' : 'none')} />
-          <InfoRow label="VMAF" value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'} />
-          <InfoRow label="Tier" value={job.tier ? String(job.tier).toUpperCase() : isLoggedIn ? 'ACCOUNT' : 'DEMO'} />
+          <InfoRow
+            label="Restore mode"
+            value={job.restoreMode || (restored ? 'full' : 'none')}
+          />
+          <InfoRow
+            label="VMAF"
+            value={vmaf != null ? vmaf.toFixed(2) : 'Not measured'}
+          />
+          <InfoRow
+            label="Tier"
+            value={
+              job.tier
+                ? String(job.tier).toUpperCase()
+                : isLoggedIn
+                  ? 'ACCOUNT'
+                  : 'DEMO'
+            }
+          />
           <InfoRow label="Platform" value={job.platform || 'Web'} />
           <InfoRow label="Started" value={formatDate(started)} />
           <InfoRow label="Completed" value={formatDate(finished)} />
           <InfoRow label="Processing time" value={formatDuration(durationMs)} />
-          <InfoRow label="Expires" value={expiryLabel(job.expiresAt, isLoggedIn)} />
-          {job.codec && <InfoRow label="Codec" value={job.codec.toUpperCase()} />}
+          <InfoRow
+            label="Expires"
+            value={expiryLabel(job.expiresAt, isLoggedIn)}
+          />
+          {job.codec && (
+            <InfoRow label="Codec" value={job.codec.toUpperCase()} />
+          )}
           {job.restoreSkippedReason && (
             <InfoRow label="Restore note" value={job.restoreSkippedReason} />
           )}
@@ -332,7 +359,6 @@ export default function SavingsCard({
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex flex-wrap gap-2.5">
         {job.url && (
           <button
@@ -343,7 +369,6 @@ export default function SavingsCard({
             Download video
           </button>
         )}
-
         <button
           type="button"
           onClick={onShareReddit}
@@ -351,7 +376,6 @@ export default function SavingsCard({
         >
           Reddit
         </button>
-
         <button
           type="button"
           onClick={onShareLinkedIn}
@@ -359,7 +383,6 @@ export default function SavingsCard({
         >
           LinkedIn
         </button>
-
         <button
           type="button"
           onClick={onShareInstagram}
@@ -367,7 +390,6 @@ export default function SavingsCard({
         >
           Instagram
         </button>
-
         <button
           type="button"
           onClick={onShareNative}

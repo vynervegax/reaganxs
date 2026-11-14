@@ -14,6 +14,9 @@ interface HistoryItem {
   savingsPercent?: number;
   modelUsed?: string;
   createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  finishedAt?: string;
   expiresAt?: string;
   status?: string;
   progress?: number;
@@ -28,6 +31,12 @@ interface HistoryItem {
   previewFrameUrls?: string[];
   previewClipUrl?: string | null;
   compressedKey?: string;
+  processingTimeMs?: number;
+  durationMs?: number;
+  tier?: string;
+  platform?: string;
+  crf?: number | string;
+  preset?: number | string;
 }
 
 const API_BASE = (
@@ -156,20 +165,46 @@ export default function HistoryPage() {
 
   const filteredHistory = history.filter((item) => !isOld(item.createdAt));
 
-  const toCardJob = (item: HistoryItem) => ({
-    url: getDownloadUrl(item),
-    savingsPercent: item.savingsPercent ?? 0,
-    modelUsed: item.modelUsed,
-    restored: Boolean(item.restored),
-    didRestore: Boolean(item.restored),
-    restoreMode: item.restoreMode,
-    originalSize: item.originalSize,
-    finalSize: item.finalSize ?? item.compressedSize,
-    codec: item.codec,
-    vmafScore: item.vmafScore ?? null,
-    previewFrames: item.previewFrameUrls || [],
-    previewClipUrl: item.previewClipUrl || null,
-  });
+  /** Full job for SavingsCard — includes timing like the list header */
+  const toCardJob = (item: HistoryItem) => {
+    const started = item.createdAt || item.startedAt || null;
+    const finished = item.completedAt || item.finishedAt || null;
+
+    let durationMs = item.processingTimeMs || item.durationMs || undefined;
+    if (!durationMs && started && finished) {
+      const a = new Date(started).getTime();
+      const b = new Date(finished).getTime();
+      if (Number.isFinite(a) && Number.isFinite(b) && b > a) {
+        durationMs = b - a;
+      }
+    }
+
+    return {
+      url: getDownloadUrl(item),
+      savingsPercent: item.savingsPercent ?? 0,
+      modelUsed: item.modelUsed,
+      restored: Boolean(item.restored),
+      didRestore: Boolean(item.restored),
+      restoreMode: item.restoreMode,
+      originalSize: item.originalSize,
+      finalSize: item.finalSize ?? item.compressedSize,
+      codec: item.codec,
+      vmafScore: item.vmafScore ?? null,
+      previewFrames: item.previewFrameUrls || [],
+      previewClipUrl: item.previewClipUrl || null,
+      createdAt: started,
+      startedAt: started,
+      completedAt: finished,
+      finishedAt: finished,
+      processingTimeMs: durationMs,
+      durationMs,
+      expiresAt: item.expiresAt,
+      tier: item.tier,
+      platform: item.platform || 'Web',
+      crf: item.crf,
+      preset: item.preset,
+    };
+  };
 
   if (loading) {
     return (
