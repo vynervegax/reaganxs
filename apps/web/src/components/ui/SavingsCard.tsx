@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { MODEL_LABELS } from '@/lib/clientRouter';
 
 type Job = {
@@ -83,7 +83,9 @@ export default function SavingsCard({
   job: Job | null | undefined;
   isLoggedIn?: boolean;
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
   const [shareMsg, setShareMsg] = useState('');
+  const [busy, setBusy] = useState(false);
 
   if (!job) return null;
 
@@ -120,18 +122,131 @@ export default function SavingsCard({
     .filter(Boolean)
     .join(' · ');
 
-  const shareText = [
-    `ReaganXS · saved ${savings}%`,
-    `${formatBytes(orig)} → ${formatBytes(fin)}`,
+  /** Caption for the CARD report (not the video) */
+  const cardCaption = [
+    'ReaganXS Processing Report',
+    `Saved ${Math.round(savings)}% · ${formatBytes(orig)} → ${formatBytes(fin)}`,
+    restored ? `Model: ${label}` : 'Compression only',
     vmaf != null ? `VMAF ${vmaf.toFixed(1)}` : null,
-    `Model: ${label}`,
-    job.url ? `Download: ${job.url}` : null,
+    job.platform ? `Platform: ${job.platform}` : null,
   ]
     .filter(Boolean)
     .join('\n');
 
-  const shareTitle = `ReaganXS — ${savings}% bandwidth saved`;
+  const shareTitle = `ReaganXS — ${Math.round(savings)}% bandwidth saved`;
 
+  const captureCardPng = async (): Promise<File | null> => {
+    const el = cardRef.current;
+    if (!el) return null;
+    const { default: html2canvas } = await import('html2canvas');
+    const canvas = await html2canvas(el, {
+      backgroundColor: '#1c140f',
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      imageTimeout: 5000,
+    });
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/png')
+    );
+    if (!blob) return null;
+    return new File([blob], `reaganxs-savings-${Date.now()}.png`, {
+      type: 'image/png',
+    });
+  };
+
+  const downloadFile = (file: File) => {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  /**
+   * Share the savings CARD image + caption.
+   * Does not share the processed video as the primary asset.
+   */
+  const shareCardTo = async (
+    platform: 'reddit' | 'linkedin' | 'instagram' | 'native'
+  ) => {
+    setShareMsg('');
+    setBusy(true);
+    try {
+      const file = await captureCardPng();
+      if (!file) {
+        setShareMsg('Could not capture savings card');
+        return;
+      }
+
+      // Mobile / supporting browsers: share the card PNG itself
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.share &&
+        navigator.canShare?.({ files: [file] })
+      ) {
+        await navigator.share({
+          title: shareTitle,
+          text: cardCaption,
+          files: [file],
+        });
+        setShareMsg('Shared savings card');
+        return;
+      }
+
+      // Desktop fallback: download card image + copy caption + open network
+      downloadFile(file);
+      try {
+        await navigator.clipboard.writeText(cardCaption);
+      } catch {
+        /* ignore */
+      }
+
+      if (platform === 'reddit') {
+        window.open(
+          'https://www.reddit.com/submit?selftext=true',
+          '_blank',
+          'noopener,noreferrer'
+        );
+        setShareMsg(
+          'Card image saved · caption copied — attach the PNG on Reddit'
+        );
+      } else if (platform === 'linkedin') {
+        window.open(
+          'https://www.linkedin.com/feed/',
+          '_blank',
+          'noopener,noreferrer'
+        );
+        setShareMsg(
+          'Card image saved · caption copied — attach the PNG on LinkedIn'
+        );
+      } else if (platform === 'instagram') {
+        const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (mobile) {
+          window.location.href = 'instagram://app';
+        } else {
+          window.open(
+            'https://www.instagram.com/',
+            '_blank',
+            'noopener,noreferrer'
+          );
+        }
+        setShareMsg(
+          'Card image saved · caption copied — post the PNG to Instagram'
+        );
+      } else {
+        setShareMsg('Card image saved · caption copied');
+      }
+    } catch {
+      setShareMsg('Share cancelled');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Processed media only — separate from card share */
   const onDownloadVideo = () => {
     if (!job.url) return;
     const a = document.createElement('a');
@@ -140,58 +255,6 @@ export default function SavingsCard({
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     a.click();
-  };
-
-  const openShare = (url: string) => {
-    window.open(url, '_blank', 'noopener,noreferrer,width=600,height=600');
-  };
-
-  const onShareReddit = () => {
-    const url = job.url
-      ? `https://www.reddit.com/submit?url=${encodeURIComponent(job.url)}&title=${encodeURIComponent(shareTitle)}`
-      : `https://www.reddit.com/submit?title=${encodeURIComponent(shareTitle)}&text=${encodeURIComponent(shareText)}`;
-    openShare(url);
-  };
-
-  const onShareLinkedIn = () => {
-    const target = job.url || window.location.href;
-    openShare(
-      `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(target)}`
-    );
-  };
-
-  const onShareInstagram = async () => {
-    try {
-      await navigator.clipboard.writeText(shareText);
-      setShareMsg('Caption copied — paste it in Instagram');
-    } catch {
-      setShareMsg('Could not copy caption');
-    }
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    if (isMobile) {
-      window.location.href = 'instagram://app';
-    } else {
-      window.open('https://www.instagram.com/', '_blank', 'noopener,noreferrer');
-    }
-  };
-
-  const onShareNative = async () => {
-    setShareMsg('');
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: shareTitle,
-          text: shareText,
-          url: job.url,
-        });
-        setShareMsg('Shared');
-        return;
-      }
-      await navigator.clipboard.writeText(shareText);
-      setShareMsg('Copied to clipboard');
-    } catch {
-      setShareMsg('Share cancelled');
-    }
   };
 
   const InfoRow = ({
@@ -211,7 +274,9 @@ export default function SavingsCard({
 
   return (
     <div className="space-y-3">
+      {/* Exportable report only — buttons stay outside */}
       <div
+        ref={cardRef}
         className="rounded-3xl border border-white/10 bg-[#1c140f] p-6 text-white"
         style={{ fontFamily: 'system-ui, sans-serif' }}
       >
@@ -359,6 +424,7 @@ export default function SavingsCard({
         )}
       </div>
 
+      {/* Actions — outside cardRef so they are not in the shared image */}
       <div className="flex flex-wrap gap-2.5">
         {job.url && (
           <button
@@ -369,33 +435,41 @@ export default function SavingsCard({
             Download video
           </button>
         )}
+
         <button
           type="button"
-          onClick={onShareReddit}
-          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+          disabled={busy}
+          onClick={() => shareCardTo('reddit')}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
-          Reddit
+          {busy ? '…' : 'Reddit'}
         </button>
+
         <button
           type="button"
-          onClick={onShareLinkedIn}
-          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+          disabled={busy}
+          onClick={() => shareCardTo('linkedin')}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
           LinkedIn
         </button>
+
         <button
           type="button"
-          onClick={onShareInstagram}
-          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+          disabled={busy}
+          onClick={() => shareCardTo('instagram')}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
           Instagram
         </button>
+
         <button
           type="button"
-          onClick={onShareNative}
-          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium"
+          disabled={busy}
+          onClick={() => shareCardTo('native')}
+          className="px-4 py-2.5 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sm font-medium disabled:opacity-50"
         >
-          More
+          Share report
         </button>
       </div>
 
