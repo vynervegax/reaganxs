@@ -1,5 +1,7 @@
 import type { MetadataRoute } from 'next';
 export const dynamic = 'force-static';
+import * as ort from 'onnxruntime-web';
+
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
