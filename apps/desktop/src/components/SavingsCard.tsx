@@ -28,7 +28,7 @@ type Result = {
   codec?: string;
   message?: string;
   model_loaded?: boolean;
-  restore_skipped_reason?: string;
+  restore_skipped_reason: string | null | undefined;
   stages?: string[];
   preview_frames?: string[];
   previewFrames?: string[];

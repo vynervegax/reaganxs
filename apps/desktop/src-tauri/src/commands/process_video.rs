@@ -2,11 +2,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use image::ImageReader;
 use tauri::State;
 
+use crate::commands::models::run_inference_sync;
 use crate::state::AppState;
 
 const REAL_MODELS: &[&str] = &[
+    "rgt",
+    "atd",
+    "bhi",
     "rgt-webphoto",
     "atd-webphoto",
     "rgt-s",
@@ -32,6 +37,7 @@ pub struct ProcessResult {
     pub restored: bool,
     pub restore_skipped_reason: Option<String>,
     pub stages: Vec<String>,
+    pub media_type: String,
 }
 
 fn run_ffmpeg(args: &[&str]) -> Result<(), String> {
@@ -63,8 +69,22 @@ fn file_size(path: &Path) -> u64 {
 fn stem_of(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("video")
+        .unwrap_or("media")
         .to_string()
+}
+
+fn media_type_of(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tiff" | "gif" => "image",
+        "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "ts" => "video",
+        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" => "audio",
+        _ => "unknown",
+    }
 }
 
 fn compress_video(input: &Path, work_dir: &Path) -> Result<(PathBuf, String), String> {
@@ -153,7 +173,134 @@ fn compress_video(input: &Path, work_dir: &Path) -> Result<(PathBuf, String), St
     Ok((vp9_out, "libvpx-vp9".to_string()))
 }
 
-/// Partial restore — real model path only when allow_real_model + model session.
+fn load_frame_nchw(path: &Path) -> Result<(Vec<f32>, usize, usize), String> {
+    let img = ImageReader::open(path)
+        .map_err(|e| format!("open frame: {e}"))?
+        .decode()
+        .map_err(|e| format!("decode frame: {e}"))?
+        .to_rgb8();
+
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut data = vec![0.0f32; 3 * h * w];
+
+    for y in 0..h {
+        for x in 0..w {
+            let p = img.get_pixel(x as u32, y as u32);
+            let base = y * w + x;
+            data[0 * h * w + base] = p[0] as f32 / 255.0;
+            data[1 * h * w + base] = p[1] as f32 / 255.0;
+            data[2 * h * w + base] = p[2] as f32 / 255.0;
+        }
+    }
+
+    Ok((data, h, w))
+}
+
+fn save_frame_nchw(path: &Path, data: &[f32], h: usize, w: usize) -> Result<(), String> {
+    let mut img = image::RgbImage::new(w as u32, h as u32);
+    for y in 0..h {
+        for x in 0..w {
+            let base = y * w + x;
+            let r = (data[0 * h * w + base] * 255.0).clamp(0.0, 255.0) as u8;
+            let g = (data[1 * h * w + base] * 255.0).clamp(0.0, 255.0) as u8;
+            let b = (data[2 * h * w + base] * 255.0).clamp(0.0, 255.0) as u8;
+            img.put_pixel(x as u32, y as u32, image::Rgb([r, g, b]));
+        }
+    }
+    img.save(path).map_err(|e| format!("save frame: {e}"))
+}
+
+fn restore_image(
+    input: &Path,
+    work_dir: &Path,
+    stem: &str,
+    model_loaded: bool,
+    loaded_name: Option<String>,
+    allow_real_model: bool,
+    state: &State<'_, AppState>,
+) -> Result<(PathBuf, bool, String, Option<String>, Vec<String>), String> {
+    let mut stages = Vec::new();
+
+    if !allow_real_model {
+        stages.push("restore:skipped_premium_required".into());
+        let out = work_dir.join(format!("{stem}_compressed.jpg"));
+        // simple recompress
+        let _ = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-y",
+                "-i",
+                input.to_str().unwrap(),
+                "-q:v",
+                "5",
+                out.to_str().unwrap(),
+            ])
+            .status();
+        return Ok((
+            if out.exists() { out } else { input.to_path_buf() },
+            false,
+            "compression-only".into(),
+            Some("Premium required for image restoration.".into()),
+            stages,
+        ));
+    }
+
+    if !model_loaded {
+        stages.push("restore:skipped_no_model".into());
+        return Ok((
+            input.to_path_buf(),
+            false,
+            "compression-only".into(),
+            Some("No model loaded.".into()),
+            stages,
+        ));
+    }
+
+    stages.push("restore:image".into());
+    let out = work_dir.join(format!("{stem}_restored.png"));
+
+    match load_frame_nchw(input) {
+        Ok((data, h, w)) => {
+            let manager = state.model_manager.lock().map_err(|e| e.to_string())?;
+            match run_inference_sync(data, 1, h, w, &manager.device, &manager.weights) {
+                Ok(out_data) => {
+                    let out_h = h * 4;
+                    let out_w = w * 4;
+                    save_frame_nchw(&out, &out_data, out_h, out_w)?;
+                    stages.push(format!(
+                        "restore:model:{}",
+                        loaded_name.clone().unwrap_or_else(|| "unknown".into())
+                    ));
+                    Ok((
+                        out,
+                        true,
+                        loaded_name.unwrap_or_else(|| "unknown".into()),
+                        None,
+                        stages,
+                    ))
+                }
+                Err(e) => {
+                    stages.push("restore:inference_failed".into());
+                    Ok((
+                        input.to_path_buf(),
+                        false,
+                        "compression-only".into(),
+                        Some(format!("Inference failed: {e}")),
+                        stages,
+                    ))
+                }
+            }
+        }
+        Err(e) => Ok((
+            input.to_path_buf(),
+            false,
+            "compression-only".into(),
+            Some(format!("Load failed: {e}")),
+            stages,
+        )),
+    }
+}
+
 fn partial_restore(
     compressed: &Path,
     work_dir: &Path,
@@ -163,6 +310,7 @@ fn partial_restore(
     requested_model: &str,
     savings: f64,
     allow_real_model: bool,
+    state: &State<'_, AppState>,
 ) -> (bool, String, Option<String>, Vec<String>) {
     let mut stages = Vec::new();
 
@@ -270,14 +418,44 @@ fn partial_restore(
         .clone()
         .unwrap_or_else(|| requested_model.to_string());
 
-    // Placeholder until Candle/ONNX forward is wired:
-    // call run_batch_inference per frame when allow_real_model.
     let mut restored_count = 0usize;
     for (idx, frame) in frame_paths.iter().enumerate() {
         let out = restored_dir.join(format!("restored_{idx:03}.png"));
-        match fs::copy(frame, &out) {
-            Ok(_) => restored_count += 1,
-            Err(e) => println!("[restore] frame {idx} copy failed: {e}"),
+
+        match load_frame_nchw(frame) {
+            Ok((data, h, w)) => {
+                let manager = match state.model_manager.lock() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        println!("[restore] lock failed: {e}");
+                        let _ = fs::copy(frame, &out);
+                        restored_count += 1;
+                        continue;
+                    }
+                };
+
+                match run_inference_sync(data, 1, h, w, &manager.device, &manager.weights) {
+                    Ok(out_data) => {
+                        let out_h = h * 4;
+                        let out_w = w * 4;
+                        if save_frame_nchw(&out, &out_data, out_h, out_w).is_ok() {
+                            restored_count += 1;
+                        } else {
+                            println!("[restore] frame {idx} save failed");
+                        }
+                    }
+                    Err(e) => {
+                        println!("[restore] frame {idx} inference failed: {e}");
+                        let _ = fs::copy(frame, &out);
+                        restored_count += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("[restore] frame {idx} load failed: {e}");
+                let _ = fs::copy(frame, &out);
+                restored_count += 1;
+            }
         }
     }
 
@@ -318,22 +496,82 @@ pub async fn process_video(
         return Err(format!("Input not found: {input_path}"));
     }
 
+    let media_type = media_type_of(&input).to_string();
     let original_size = file_size(&input);
     let work_dir = input
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
     let stem = stem_of(&input);
-    let requested_model = model.unwrap_or_else(|| "atd-webphoto".to_string());
+    let requested_model = model.unwrap_or_else(|| "atd".to_string());
 
     if is_real_model(&requested_model) && !allow_real_model {
-        // Still allow compress-only run
-        println!(
-            "[process] real model requested without premium — compress only"
-        );
+        println!("[process] real model requested without premium — compress only");
     }
 
-    // 1) Compress always
+    let (model_loaded, loaded_name) = {
+        let manager = state.model_manager.lock().map_err(|e| e.to_string())?;
+        (manager.current_model.is_some(), manager.current_model.clone())
+    };
+
+    let mut stages = vec![format!("media:{media_type}")];
+
+    if media_type == "image" {
+        let (final_path, restored, model_used, reason, restore_stages) = restore_image(
+            &input,
+            &work_dir,
+            &stem,
+            model_loaded,
+            loaded_name.clone(),
+            allow_real_model,
+            &state,
+        )?;
+        stages.extend(restore_stages);
+        let final_size = file_size(&final_path);
+        let savings = if original_size > 0 {
+            ((1.0 - (final_size as f64 / original_size as f64)) * 100.0).max(0.0)
+        } else {
+            0.0
+        };
+        return Ok(ProcessResult {
+            output_path: final_path.to_string_lossy().to_string(),
+            savings_percent: (savings * 10.0).round() / 10.0,
+            model_used,
+            codec: "image".into(),
+            original_size,
+            final_size,
+            message: format!("Image processed · restored={restored}"),
+            model_loaded,
+            model_name: loaded_name,
+            restored,
+            restore_skipped_reason: reason,
+            stages,
+            media_type,
+        });
+    }
+
+    if media_type == "audio" {
+        let out = work_dir.join(format!("{stem}_copy{}", input.extension().and_then(|e| e.to_str()).unwrap_or("")));
+        fs::copy(&input, &out).map_err(|e| e.to_string())?;
+        stages.push("audio:passthrough".into());
+        return Ok(ProcessResult {
+            output_path: out.to_string_lossy().to_string(),
+            savings_percent: 0.0,
+            model_used: "none".into(),
+            codec: "audio".into(),
+            original_size,
+            final_size: file_size(&out),
+            message: "Audio passed through".into(),
+            model_loaded: false,
+            model_name: None,
+            restored: false,
+            restore_skipped_reason: Some("Audio does not use restoration models".into()),
+            stages,
+            media_type,
+        });
+    }
+
+    // video path (existing logic)
     let (compressed_path, codec) = compress_video(&input, &work_dir)?;
     let compressed_size = file_size(&compressed_path);
     let savings = if original_size > 0 {
@@ -342,16 +580,8 @@ pub async fn process_video(
         0.0
     };
 
-    let mut stages = vec![
-        format!("compress:ok ({codec})"),
-        format!("savings:{savings:.1}%"),
-    ];
-
-    // 2) Model session
-    let (model_loaded, loaded_name) = {
-        let manager = state.model_manager.lock().map_err(|e| e.to_string())?;
-        (manager.current_model.is_some(), manager.current_model.clone())
-    };
+    stages.push(format!("compress:ok ({codec})"));
+    stages.push(format!("savings:{savings:.1}%"));
 
     if model_loaded {
         if let Some(ref name) = loaded_name {
@@ -365,7 +595,6 @@ pub async fn process_video(
         stages.push("model:not_loaded".into());
     }
 
-    // 3) Restore only if premium allows real path
     let effective_loaded = model_loaded
         && allow_real_model
         && loaded_name
@@ -382,6 +611,7 @@ pub async fn process_video(
         &requested_model,
         savings,
         allow_real_model,
+        &state,
     );
     stages.extend(restore_stages);
 
@@ -406,5 +636,6 @@ pub async fn process_video(
         restored,
         restore_skipped_reason: restore_reason,
         stages,
+        media_type,
     })
 }

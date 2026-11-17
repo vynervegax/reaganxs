@@ -16,6 +16,7 @@ backend/models/*.safetensors
 backend/models/*.onnx
 backend/models/003_ATD_SRx4_finetune.pth
 apps/desktop/src-tauri/models/003_ATD_SRx4_finetune.pth
+apps/desktop/src-tauri/models/4xRealWebPhoto_v2_rtg_s.safetensors
 backend/tmp
 # Tauri / Rust
 apps/desktop/src-tauri/target/

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "sonner";
+import RegisterSW from '@/components/RegisterSW';
+import InstallButton from '@/components/InstallButton';
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -13,14 +15,14 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
       <body className={inter.className}>
+        <RegisterSW />
+        <div className="fixed top-4 right-4 z-50">
+          <InstallButton />
+        </div>
         {children}
         <Toaster position="top-center" richColors closeButton />
       </body>

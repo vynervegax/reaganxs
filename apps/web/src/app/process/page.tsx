@@ -12,6 +12,7 @@ import DeviceStatus from '@/components/ui/DeviceStatus';
 import RestoreStatus from '@/components/ui/RestoreStatus';
 import { getDeviceProfile } from '@/lib/deviceProfile';
 import ProcessingTicker from '@/components/ui/ProcessingTicker';
+import { restoreImage } from '@/lib/restore';
 
 type JobResult = {
   success?: boolean;
@@ -302,6 +303,42 @@ console.log('TIMESTAMP FIELDS:', {
             {isLoggedIn ? `Logged in · ${tier.toUpperCase()}` : 'DEMO'}
           </div>
         </div>
+
+        {isLoggedIn && (tier === 'premium' || tier === 'desktop') && (
+  <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+    <p className="text-sm text-white/70 mb-3">On-device restoration</p>
+    <div className="flex flex-wrap gap-3 items-center">
+      <select
+        id="model-select"
+        className="bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm"
+        defaultValue="atd"
+      >
+        <option value="rgt">RGT-S</option>
+        <option value="atd">ATD</option>
+        <option value="bhi">BHI</option>
+      </select>
+      <input
+        type="file"
+        accept="image/*"
+        id="restore-file"
+        className="text-sm"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const model = (document.getElementById('model-select') as HTMLSelectElement).value as 'rgt' | 'atd' | 'bhi';
+          try {
+            const blob = await restoreImage(file, model);
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+          } catch (err) {
+            console.error(err);
+            setError('Restore failed');
+          }
+        }}
+      />
+    </div>
+  </div>
+)}
 
         {error && (
           <div className="bg-yellow-900/40 border border-yellow-600/50 text-yellow-200 p-4 rounded-2xl mb-6 text-sm">

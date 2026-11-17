@@ -212,11 +212,9 @@ export default function ModelSelector({
                   {m.powerLevel} · {m.file}
                 </div>
               </div>
-              {m.isBest && !locked && (
-                <span className="text-xs bg-[#c084fc] text-black px-2 py-0.5 rounded-full">
-                  BEST
-                </span>
-              )}
+              {m.id === 'atd-webphoto' && !locked && (
+  <span className="...">Best</span>
+)}
             </button>
           );
         })}

@@ -152,9 +152,9 @@ export default function App() {
               </p>
               <p className="text-xs text-white/50 mt-1">
                 {result.message ||
-                  (result.did_restore || result.restored
-                    ? 'Compressed and restored'
-                    : 'Compressed. Restoration skipped or not beneficial.')}
+  (result.restored
+    ? 'Compressed and restored'
+    : 'Compressed. Restoration skipped or not beneficial.')}
               </p>
             </div>
 
