@@ -23,6 +23,8 @@ type Job = {
   crf?: number | string;
   preset?: number | string;
   expiresAt?: string | Date | null;
+  deleted?: boolean;
+  deletedAt?: string | Date | null;
   tier?: string;
   createdAt?: string | Date | null;
   completedAt?: string | Date | null;
@@ -137,6 +139,8 @@ export default function SavingsCard({
   const restoreModeLabel =
     job.restoreMode || (restored ? 'full' : 'none');
 
+  const isDeleted = Boolean(job.deleted || job.deletedAt);
+
   const shareTitle = `ReaganXS — ${Math.round(savings)}% bandwidth saved`;
   const cardCaption = [
     'ReaganXS Processing Report',
@@ -148,7 +152,7 @@ export default function SavingsCard({
     .filter(Boolean)
     .join('\n');
 
-  /** All rows for export poster */
+  /** All rows for export poster — Expires only when deleted */
   const exportRows: { label: string; value: string }[] = [
     { label: 'Compression', value: compressLine || '—' },
     { label: 'Model', value: restored ? label : 'None' },
@@ -162,8 +166,21 @@ export default function SavingsCard({
     { label: 'Started', value: formatDate(started) },
     { label: 'Completed', value: formatDate(finished) },
     { label: 'Processing time', value: formatDuration(durationMs) },
-    { label: 'Expires', value: expiryLabel(job.expiresAt, isLoggedIn) },
   ];
+
+  if (isDeleted) {
+    exportRows.push({
+      label: 'Expires',
+      value: expiryLabel(job.expiresAt, isLoggedIn),
+    });
+    if (job.deletedAt) {
+      exportRows.push({
+        label: 'Deleted',
+        value: formatDate(job.deletedAt),
+      });
+    }
+  }
+
   if (job.codec) {
     exportRows.push({ label: 'Codec', value: job.codec.toUpperCase() });
   }
