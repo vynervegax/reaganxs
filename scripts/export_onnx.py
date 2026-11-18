@@ -5,9 +5,11 @@ from spandrel import ModelLoader
 
 def export_model(safetensors_path: str, onnx_path: str):
     descriptor = ModelLoader().load_from_file(safetensors_path)
-    model = descriptor.model.eval()
+    model = descriptor.model.eval().cpu()
 
     dummy = torch.randn(1, 3, 64, 64)
+
+    # Prefer classic exporter for SR models (more compatible than dynamo)
     torch.onnx.export(
         model,
         dummy,
@@ -18,20 +20,19 @@ def export_model(safetensors_path: str, onnx_path: str):
         dynamic_axes={
             "input": {2: "height", 3: "width"},
             "output": {2: "height", 3: "width"},
-        }z
-        dynamo=True,
+        },
+        do_constant_folding=True,
     )
-    print(f"Exported {onnx_path} (Detected architecture: {descriptor.architecture.name})")
+    print(
+        f"Exported {onnx_path} (architecture: {descriptor.architecture.name})"
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="Path to .safetensors")
-    parser.add_argument("--output", required=True, help="Path to write .onnx")
-    parser.add_argument("--arch", required=False, choices=["rgt", "atd", "bhi"])
-    parser.add_argument("--scale", type=int, default=4)
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
     args = parser.parse_args()
-
     export_model(args.input, args.output)
 
 
