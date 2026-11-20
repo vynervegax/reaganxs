@@ -55,6 +55,87 @@ function fileSize(p: string): number {
 }
 
 /**
+ * Sharpener selection — CAS (Contrast Adaptive Sharpen, FFmpeg >= 4.3)
+ * preferred over unsharp: halo-free edges, no ringing on enhanced output.
+ * Probed once per process; falls back to unsharp on older FFmpeg builds.
+ */
+let sharpenerProbe: Promise<boolean> | null = null;
+
+function hasCas(): Promise<boolean> {
+  if (!sharpenerProbe) {
+    sharpenerProbe = new Promise((resolve) => {
+      const p = spawn('ffmpeg', ['-hide_banner', '-filters']);
+      let out = '';
+      const timer = setTimeout(() => {
+        p.kill('SIGKILL');
+        resolve(false);
+      }, 10_000);
+      p.stdout.on('data', (d) => (out += d.toString()));
+      p.on('close', () => {
+        clearTimeout(timer);
+        resolve(/^\s*[\w.]+\s+cas\s+/m.test(out));
+      });
+      p.on('error', () => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+  }
+  return sharpenerProbe;
+}
+
+async function sharpen(
+  casStrength: number,
+  unsharpFallback: string
+): Promise<string> {
+  return (await hasCas()) ? `cas=${casStrength}` : unsharpFallback;
+}
+
+/**
+ * Audio strategy — the restore input is normally our own compressed file,
+ * whose audio is already Opus 96k. Copying avoids a second lossy generation
+ * and saves CPU. Anything that is NOT Opus (e.g. AAC from a client-side
+ * skipCompress upload) is re-encoded to libopus so no encumbered audio
+ * can ever reach the delivered output.
+ */
+function probeAudioCodec(inputPath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const p = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      inputPath,
+    ]);
+
+    let out = '';
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL');
+      resolve(null);
+    }, 10_000);
+
+    p.stdout.on('data', (d) => (out += d.toString()));
+    p.on('close', () => {
+      clearTimeout(timer);
+      resolve(out.trim() || null);
+    });
+    p.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+async function audioArgs(inputPath: string): Promise<string[]> {
+  const codec = await probeAudioCodec(inputPath);
+  if (codec === 'opus') {
+    return ['-c:a', 'copy'];
+  }
+  // Unknown / absent / encumbered → safe royalty-free encode
+  return ['-c:a', 'libopus', '-b:a', '96k', '-ac', '2', '-ar', '48000'];
+}
+
+/**
  * Full-timeline restore encode.
  * Speed rule: if AV1 times out or fails, do NOT run another full VP9 pass —
  * throw so the worker switches to partial frames (same quality samples, ~10 min saved).
@@ -66,6 +147,7 @@ async function encodeAv1OrVp9(
 ): Promise<'libsvtav1' | 'libvpx-vp9'> {
   const videoFilter = vf ? ['-vf', vf] : [];
   const av1 = outPath.replace(/(\.\w+)?$/, '_av1.mp4');
+  const audio = await audioArgs(inputPath);
 
   try {
     await run(
@@ -76,14 +158,11 @@ async function encodeAv1OrVp9(
         '-map', '0:a:0?',
         '-c:v', 'libsvtav1',
         '-preset', '8',
-        '-crf', '28',
+        '-crf', '28', // optional: 26 for a gentler second pass (size gate still protects)
         '-pix_fmt', 'yuv420p',
-        '-svtav1-params', 'lp=1',
+        '-svtav1-params', 'lp=1:tune=0', // tune=0 → visual-quality tune (same speed)
         '-threads', '2',
-        '-c:a', 'libopus',
-        '-b:a', '96k',
-        '-ac', '2',
-        '-ar', '48000',
+        ...audio,
         '-movflags', '+faststart',
         '-sn',
         av1,
@@ -115,10 +194,12 @@ async function enhanceFramePng(
   maxWidth: number
 ): Promise<void> {
   const vfA = [
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-    'hqdn3d=1.5:1.5:3:3',
-    'eq=contrast=1.06:brightness=0.02:saturation=1.05',
-    'unsharp=5:5:1.2:5:5:0.6',
+    `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
+'hqdn3d=1.2:1.2:2.5:2.5',
+    'eq=contrast=1.06:saturation=1.05', // brightness lift removed (amplifies banding)
+    'gradfun=1.2:8',                    // cheap debanding of 8-bit gradients
+    await sharpen(0.35, 'unsharp=5:5:1.2:5:5:0.6'),
   ].join(',');
 
   try {
@@ -130,9 +211,10 @@ async function enhanceFramePng(
 
   const vfB = [
     'scale=iw*2:ih*2:flags=lanczos',
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+    `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
     'hqdn3d=1.0:1.0:2:2',
-    'unsharp=5:5:1.0:5:5:0.5',
+    'gradfun=1.2:8',
+    await sharpen(0.3, 'unsharp=5:5:1.0:5:5:0.5'),
   ].join(',');
 
   await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
@@ -224,10 +306,11 @@ export const restorationService = {
 
     const maxWidth = opts.maxWidth ?? 1920;
     const vf = [
-      `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+      `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
       'hqdn3d=1.2:1.2:2.5:2.5',
       'eq=contrast=1.04:saturation=1.03',
-      'unsharp=5:5:0.9:5:5:0.45',
+      'gradfun=1.2:8',
+      await sharpen(0.3, 'unsharp=5:5:0.9:5:5:0.45'),
     ].join(',');
 
     await encodeAv1OrVp9(source, outPath, vf);
@@ -239,7 +322,7 @@ export const restorationService = {
     opts: { frameCount?: number; maxWidth?: number } = {}
   ): Promise<PartialFrameResult> {
     if (!fs.existsSync(compressedPath)) {
-      throw new Error(`Partial restore input missing: ${compressedPath}`);
+      throw new Error('Partial restore input missing: ' + compressedPath);
     }
 
     const frameCount = opts.frameCount ?? 2;
@@ -253,21 +336,35 @@ export const restorationService = {
     fs.mkdirSync(framesOut, { recursive: true });
 
     const patternIn = path.join(framesIn, 'frame_%03d.png');
-    await run(
-      [
-        '-i', compressedPath,
-        '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-        '-frames:v', String(frameCount),
-        patternIn,
-      ],
-      PARTIAL_EXTRACT_TIMEOUT_MS
-    );
 
-    const inputs = fs
-      .readdirSync(framesIn)
-      .filter((f) => f.endsWith('.png'))
-      .sort()
-      .map((f) => path.join(framesIn, f));
+    const extractArgs = (seek?: string): string[] => [
+      ...(seek ? ['-ss', seek] : []),
+      '-i', compressedPath,
+      '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd`,
+      '-frames:v', String(frameCount),
+      patternIn,
+    ];
+
+    const readFrames = (): string[] =>
+      fs
+        .readdirSync(framesIn)
+        .filter((f) => f.endsWith('.png'))
+        .sort()
+        .map((f) => path.join(framesIn, f));
+
+    // Skip the first second — t=0 is often black/fade-in (poor showcase frame).
+    try {
+      await run(extractArgs('1'), PARTIAL_EXTRACT_TIMEOUT_MS);
+    } catch {
+      /* very short clip or seek issue — retry from t=0 below */
+    }
+
+    let inputs = readFrames();
+
+    if (inputs.length === 0) {
+      await run(extractArgs(), PARTIAL_EXTRACT_TIMEOUT_MS);
+      inputs = readFrames();
+    }
 
     if (inputs.length === 0) {
       throw new Error('No frames extracted for partial restore');
@@ -340,7 +437,7 @@ export const restorationService = {
           '-c:v', 'libsvtav1',
           '-preset', '10',
           '-crf', '28',
-          '-svtav1-params', 'lp=1',
+          '-svtav1-params', 'lp=1:tune=0',
           '-threads', '2',
           '-an',
           raw,
