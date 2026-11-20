@@ -8,7 +8,7 @@ import {
 } from '../config/constants';
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-const FRAME_TIMEOUT_MS = 90 * 1000; // 90 s — fail faster on bad frames
+const FRAME_TIMEOUT_MS = 90 * 1000; // 90 s
 const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -188,21 +188,48 @@ function shouldUseAggressive(
   if (opts.forceAggressive) return true;
   if (opts.forceLight) return false;
 
-  // Prefer aggressive on short clips or high-savings jobs
-  if (durationSec != null && durationSec > 0 && durationSec <= 30) return true;
-  if (savingsPercent != null && savingsPercent >= 50) return true;
+  // Aggressive only on high-savings jobs (> 50 %)
+  if (savingsPercent != null && savingsPercent > 50) return true;
 
   return false;
 }
 
+/** Decide whether to upscale (model-free). */
+function shouldUpscale(
+  opts: RestoreOptions,
+  savingsPercent?: number
+): boolean {
+  if (opts.forceUpscale) return true;
+  if (opts.forceNoUpscale) return false;
+
+  const factor = opts.upscaleFactor ?? 1;
+  if (factor <= 1) return false;
+
+  // Only upscale on high-savings jobs
+  if (savingsPercent != null && savingsPercent > 50) return true;
+
+  return false;
+}
+
+function buildScaleFilter(
+  maxWidth: number,
+  upscaleFactor: number
+): string {
+  if (upscaleFactor > 1) {
+    // Even dimensions required by most encoders
+    return `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`;
+  }
+  return `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
+}
+
 async function buildVideoFilter(
   maxWidth: number,
-  aggressive: boolean
+  aggressive: boolean,
+  upscaleFactor: number
 ): Promise<string> {
-  const scale = `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
+  const scale = buildScaleFilter(maxWidth, upscaleFactor);
 
   if (aggressive) {
-    // Stronger denoise + deband + sharpen (still fast on short / high-savings jobs)
     return [
       scale,
       'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
@@ -213,7 +240,6 @@ async function buildVideoFilter(
     ].join(',');
   }
 
-  // Default light chain
   return [
     scale,
     'hqdn3d=1.2:1.2:2.5:2.5',
@@ -227,11 +253,14 @@ async function enhanceFramePng(
   src: string,
   dest: string,
   maxWidth: number,
-  aggressive = false
+  aggressive = false,
+  upscaleFactor = 1
 ): Promise<void> {
+  const scale = buildScaleFilter(maxWidth, upscaleFactor);
+
   const vfA = aggressive
     ? [
-        `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+        scale,
         'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
         'hqdn3d=1.8:1.8:2.5:2.5',
         'eq=contrast=1.06:saturation=1.05',
@@ -239,7 +268,7 @@ async function enhanceFramePng(
         await sharpen(0.4, 'unsharp=5:5:1.3:5:5:0.65'),
       ].join(',')
     : [
-        `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+        scale,
         'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
         'hqdn3d=1.2:1.2:2.5:2.5',
         'eq=contrast=1.06:saturation=1.05',
@@ -254,9 +283,9 @@ async function enhanceFramePng(
     /* fall through */
   }
 
-  // Fallback: simpler chain (no 2× upscale)
+  // Fallback: simpler chain
   const vfB = [
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+    scale,
     'hqdn3d=1.0:1.0:2:2',
     'gradfun=1.2:8',
     await sharpen(0.3, 'unsharp=5:5:1.0:5:5:0.5'),
@@ -276,6 +305,12 @@ export type RestoreOptions = {
   durationSec?: number;
   /** Optional: savings percent (used by the gate) */
   savingsPercent?: number;
+  /** Model-free upscale factor (1 = none, 1.5 or 2 typical). Even output dimensions enforced. */
+  upscaleFactor?: number;
+  /** Force upscale regardless of savings */
+  forceUpscale?: boolean;
+  /** Force no upscale */
+  forceNoUpscale?: boolean;
 };
 
 export type PartialFrameResult = {
@@ -364,7 +399,10 @@ export const restorationService = {
       opts.savingsPercent
     );
 
-    const vf = await buildVideoFilter(maxWidth, aggressive);
+    const doUpscale = shouldUpscale(opts, opts.savingsPercent);
+    const upscaleFactor = doUpscale ? (opts.upscaleFactor ?? 2) : 1;
+
+    const vf = await buildVideoFilter(maxWidth, aggressive, upscaleFactor);
     await encodeAv1OrVp9(source, outPath, vf);
   },
 
@@ -376,6 +414,9 @@ export const restorationService = {
       maxWidth?: number;
       forceAggressive?: boolean;
       savingsPercent?: number;
+      upscaleFactor?: number;
+      forceUpscale?: boolean;
+      forceNoUpscale?: boolean;
     } = {}
   ): Promise<PartialFrameResult> {
     if (!fs.existsSync(compressedPath)) {
@@ -389,6 +430,9 @@ export const restorationService = {
       undefined,
       opts.savingsPercent
     );
+
+    const doUpscale = shouldUpscale(opts, opts.savingsPercent);
+    const upscaleFactor = doUpscale ? (opts.upscaleFactor ?? 2) : 1;
 
     const dir = path.dirname(compressedPath);
     const stem = path.basename(compressedPath, path.extname(compressedPath));
@@ -442,7 +486,7 @@ export const restorationService = {
       );
 
       try {
-        await enhanceFramePng(src, dest, maxWidth, aggressive);
+        await enhanceFramePng(src, dest, maxWidth, aggressive, upscaleFactor);
       } catch {
         try {
           fs.copyFileSync(src, dest);
