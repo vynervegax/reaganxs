@@ -8,7 +8,7 @@ import {
 } from '../config/constants';
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
+const FRAME_TIMEOUT_MS = 90 * 1000; // 90 s — fail faster on bad frames
 const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -55,9 +55,8 @@ function fileSize(p: string): number {
 }
 
 /**
- * Sharpener selection — CAS (Contrast Adaptive Sharpen, FFmpeg >= 4.3)
- * preferred over unsharp: halo-free edges, no ringing on enhanced output.
- * Probed once per process; falls back to unsharp on older FFmpeg builds.
+ * Sharpener selection — CAS preferred; unsharp fallback.
+ * Probed once per process.
  */
 let sharpenerProbe: Promise<boolean> | null = null;
 
@@ -92,11 +91,7 @@ async function sharpen(
 }
 
 /**
- * Audio strategy — the restore input is normally our own compressed file,
- * whose audio is already Opus 96k. Copying avoids a second lossy generation
- * and saves CPU. Anything that is NOT Opus (e.g. AAC from a client-side
- * skipCompress upload) is re-encoded to libopus so no encumbered audio
- * can ever reach the delivered output.
+ * Audio strategy — copy Opus when possible; otherwise re-encode to libopus.
  */
 function probeAudioCodec(inputPath: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -131,14 +126,12 @@ async function audioArgs(inputPath: string): Promise<string[]> {
   if (codec === 'opus') {
     return ['-c:a', 'copy'];
   }
-  // Unknown / absent / encumbered → safe royalty-free encode
   return ['-c:a', 'libopus', '-b:a', '96k', '-ac', '2', '-ar', '48000'];
 }
 
 /**
  * Full-timeline restore encode.
- * Speed rule: if AV1 times out or fails, do NOT run another full VP9 pass —
- * throw so the worker switches to partial frames (same quality samples, ~10 min saved).
+ * On AV1 failure/timeout, throw so the caller switches to partial frames.
  */
 async function encodeAv1OrVp9(
   inputPath: string,
@@ -158,9 +151,9 @@ async function encodeAv1OrVp9(
         '-map', '0:a:0?',
         '-c:v', 'libsvtav1',
         '-preset', '8',
-        '-crf', '28', // optional: 26 for a gentler second pass (size gate still protects)
+        '-crf', '28',
         '-pix_fmt', 'yuv420p',
-        '-svtav1-params', 'lp=1:tune=0', // tune=0 → visual-quality tune (same speed)
+        '-svtav1-params', 'lp=1:tune=0',
         '-threads', '2',
         ...audio,
         '-movflags', '+faststart',
@@ -175,7 +168,6 @@ async function encodeAv1OrVp9(
       return 'libsvtav1';
     }
 
-    // Empty output without throw — treat as failure for full path
     throw new Error('Full restore AV1 produced empty output');
   } catch (e: any) {
     const msg = e?.message || String(e);
@@ -183,24 +175,77 @@ async function encodeAv1OrVp9(
       '[restore] full AV1 failed/timed out — skip full VP9 → partial',
       msg.slice?.(0, 200) || msg
     );
-    // Do not start a second full-timeline VP9 enhance (saves ~10 min on large jobs)
     throw e instanceof Error ? e : new Error(msg);
   }
+}
+
+/** Decide whether to use the stronger filter chain. */
+function shouldUseAggressive(
+  opts: RestoreOptions,
+  durationSec?: number,
+  savingsPercent?: number
+): boolean {
+  if (opts.forceAggressive) return true;
+  if (opts.forceLight) return false;
+
+  // Prefer aggressive on short clips or high-savings jobs
+  if (durationSec != null && durationSec > 0 && durationSec <= 30) return true;
+  if (savingsPercent != null && savingsPercent >= 50) return true;
+
+  return false;
+}
+
+async function buildVideoFilter(
+  maxWidth: number,
+  aggressive: boolean
+): Promise<string> {
+  const scale = `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
+
+  if (aggressive) {
+    // Stronger denoise + deband + sharpen (still fast on short / high-savings jobs)
+    return [
+      scale,
+      'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
+      'hqdn3d=2.0:2.0:3:3',
+      'eq=contrast=1.05:saturation=1.04',
+      'gradfun=1.5:8',
+      await sharpen(0.45, 'unsharp=5:5:1.4:5:5:0.7'),
+    ].join(',');
+  }
+
+  // Default light chain
+  return [
+    scale,
+    'hqdn3d=1.2:1.2:2.5:2.5',
+    'eq=contrast=1.04:saturation=1.03',
+    'gradfun=1.2:8',
+    await sharpen(0.3, 'unsharp=5:5:0.9:5:5:0.45'),
+  ].join(',');
 }
 
 async function enhanceFramePng(
   src: string,
   dest: string,
-  maxWidth: number
+  maxWidth: number,
+  aggressive = false
 ): Promise<void> {
-  const vfA = [
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
-'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
-'hqdn3d=1.2:1.2:2.5:2.5',
-    'eq=contrast=1.06:saturation=1.05', // brightness lift removed (amplifies banding)
-    'gradfun=1.2:8',                    // cheap debanding of 8-bit gradients
-    await sharpen(0.35, 'unsharp=5:5:1.2:5:5:0.6'),
-  ].join(',');
+  const vfA = aggressive
+    ? [
+        `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+        'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
+        'hqdn3d=1.8:1.8:2.5:2.5',
+        'eq=contrast=1.06:saturation=1.05',
+        'gradfun=1.5:8',
+        await sharpen(0.4, 'unsharp=5:5:1.3:5:5:0.65'),
+      ].join(',')
+    : [
+        `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
+        'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
+        'hqdn3d=1.2:1.2:2.5:2.5',
+        'eq=contrast=1.06:saturation=1.05',
+        'gradfun=1.2:8',
+        await sharpen(0.35, 'unsharp=5:5:1.2:5:5:0.6'),
+      ].join(',');
 
   try {
     await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
@@ -209,8 +254,8 @@ async function enhanceFramePng(
     /* fall through */
   }
 
+  // Fallback: simpler chain (no 2× upscale)
   const vfB = [
-    'scale=iw*2:ih*2:flags=lanczos',
     `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
     'hqdn3d=1.0:1.0:2:2',
     'gradfun=1.2:8',
@@ -223,6 +268,14 @@ async function enhanceFramePng(
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
+  /** Force the stronger filter chain */
+  forceAggressive?: boolean;
+  /** Force the light filter chain */
+  forceLight?: boolean;
+  /** Optional: duration in seconds (used by the gate) */
+  durationSec?: number;
+  /** Optional: savings percent (used by the gate) */
+  savingsPercent?: number;
 };
 
 export type PartialFrameResult = {
@@ -305,21 +358,25 @@ export const restorationService = {
     }
 
     const maxWidth = opts.maxWidth ?? 1920;
-    const vf = [
-      `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`,
-      'hqdn3d=1.2:1.2:2.5:2.5',
-      'eq=contrast=1.04:saturation=1.03',
-      'gradfun=1.2:8',
-      await sharpen(0.3, 'unsharp=5:5:0.9:5:5:0.45'),
-    ].join(',');
+    const aggressive = shouldUseAggressive(
+      opts,
+      opts.durationSec,
+      opts.savingsPercent
+    );
 
+    const vf = await buildVideoFilter(maxWidth, aggressive);
     await encodeAv1OrVp9(source, outPath, vf);
   },
 
   async restorePartialFrames(
     compressedPath: string,
     model: string,
-    opts: { frameCount?: number; maxWidth?: number } = {}
+    opts: {
+      frameCount?: number;
+      maxWidth?: number;
+      forceAggressive?: boolean;
+      savingsPercent?: number;
+    } = {}
   ): Promise<PartialFrameResult> {
     if (!fs.existsSync(compressedPath)) {
       throw new Error('Partial restore input missing: ' + compressedPath);
@@ -327,6 +384,12 @@ export const restorationService = {
 
     const frameCount = opts.frameCount ?? 2;
     const maxWidth = opts.maxWidth ?? 720;
+    const aggressive = shouldUseAggressive(
+      { forceAggressive: opts.forceAggressive },
+      undefined,
+      opts.savingsPercent
+    );
+
     const dir = path.dirname(compressedPath);
     const stem = path.basename(compressedPath, path.extname(compressedPath));
     const workDir = path.join(dir, `${stem}_partial_${Date.now()}`);
@@ -352,11 +415,10 @@ export const restorationService = {
         .sort()
         .map((f) => path.join(framesIn, f));
 
-    // Skip the first second — t=0 is often black/fade-in (poor showcase frame).
     try {
       await run(extractArgs('1'), PARTIAL_EXTRACT_TIMEOUT_MS);
     } catch {
-      /* very short clip or seek issue — retry from t=0 below */
+      /* retry from t=0 */
     }
 
     let inputs = readFrames();
@@ -380,7 +442,7 @@ export const restorationService = {
       );
 
       try {
-        await enhanceFramePng(src, dest, maxWidth);
+        await enhanceFramePng(src, dest, maxWidth, aggressive);
       } catch {
         try {
           fs.copyFileSync(src, dest);
@@ -427,7 +489,6 @@ export const restorationService = {
 
     const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
 
-    // Preview clip is tiny — VP9-only is fine for speed
     try {
       await run(
         [
