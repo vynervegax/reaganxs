@@ -91,6 +91,38 @@ async function sharpen(
 }
 
 /**
+ * Filter availability probe (libplacebo / scale_npp).
+ * Probed once per process.
+ */
+let filterProbe: Promise<{ hasPlacebo: boolean; hasNpp: boolean }> | null = null;
+
+function probeFilters(): Promise<{ hasPlacebo: boolean; hasNpp: boolean }> {
+  if (!filterProbe) {
+    filterProbe = new Promise((resolve) => {
+      const p = spawn('ffmpeg', ['-hide_banner', '-filters']);
+      let out = '';
+      const timer = setTimeout(() => {
+        p.kill('SIGKILL');
+        resolve({ hasPlacebo: false, hasNpp: false });
+      }, 10_000);
+      p.stdout.on('data', (d) => (out += d.toString()));
+      p.on('close', () => {
+        clearTimeout(timer);
+        resolve({
+          hasPlacebo: /^\s*[\w.]+\s+libplacebo\s+/m.test(out),
+          hasNpp: /^\s*[\w.]+\s+scale_npp\s+/m.test(out),
+        });
+      });
+      p.on('error', () => {
+        clearTimeout(timer);
+        resolve({ hasPlacebo: false, hasNpp: false });
+      });
+    });
+  }
+  return filterProbe;
+}
+
+/**
  * Audio strategy — copy Opus when possible; otherwise re-encode to libopus.
  */
 function probeAudioCodec(inputPath: string): Promise<string | null> {
@@ -211,14 +243,28 @@ function shouldUpscale(
   return false;
 }
 
-function buildScaleFilter(
+async function buildScaleFilter(
   maxWidth: number,
-  upscaleFactor: number
-): string {
+  upscaleFactor: number,
+  preferGpu = true
+): Promise<string> {
+  if (upscaleFactor > 1 && preferGpu) {
+    const { hasPlacebo, hasNpp } = await probeFilters();
+
+    if (hasPlacebo) {
+      return `libplacebo=w=trunc(iw*${upscaleFactor}/2)*2:h=trunc(ih*${upscaleFactor}/2)*2:upscaler=ewa_lanczos:deband=1:deband_iterations=1`;
+    }
+
+    if (hasNpp) {
+      return `scale_npp=w=trunc(iw*${upscaleFactor}/2)*2:h=trunc(ih*${upscaleFactor}/2)*2:interp_algo=lanczos`;
+    }
+  }
+
+  // CPU fallback
   if (upscaleFactor > 1) {
-    // Even dimensions required by most encoders
     return `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`;
   }
+
   return `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
 }
 
@@ -227,7 +273,7 @@ async function buildVideoFilter(
   aggressive: boolean,
   upscaleFactor: number
 ): Promise<string> {
-  const scale = buildScaleFilter(maxWidth, upscaleFactor);
+  const scale = await buildScaleFilter(maxWidth, upscaleFactor);
 
   if (aggressive) {
     return [
@@ -256,7 +302,7 @@ async function enhanceFramePng(
   aggressive = false,
   upscaleFactor = 1
 ): Promise<void> {
-  const scale = buildScaleFilter(maxWidth, upscaleFactor);
+  const scale = await buildScaleFilter(maxWidth, upscaleFactor);
 
   const vfA = aggressive
     ? [
@@ -283,9 +329,13 @@ async function enhanceFramePng(
     /* fall through */
   }
 
-  // Fallback: simpler chain
+  // Fallback: simpler chain (CPU scale only)
+  const scaleCpu = upscaleFactor > 1
+    ? `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`
+    : `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
+
   const vfB = [
-    scale,
+    scaleCpu,
     'hqdn3d=1.0:1.0:2:2',
     'gradfun=1.2:8',
     await sharpen(0.3, 'unsharp=5:5:1.0:5:5:0.5'),
