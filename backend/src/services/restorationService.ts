@@ -220,8 +220,8 @@ function shouldUseAggressive(
   if (opts.forceAggressive) return true;
   if (opts.forceLight) return false;
 
-  // Aggressive only on high-savings jobs (> 50 %)
-  if (savingsPercent != null && savingsPercent > 50) return true;
+  // Lowered from 50 % → 35 % so more jobs get the stronger chain
+  if (savingsPercent != null && savingsPercent > 35) return true;
 
   return false;
 }
@@ -237,8 +237,8 @@ function shouldUpscale(
   const factor = opts.upscaleFactor ?? 1;
   if (factor <= 1) return false;
 
-  // Only upscale on high-savings jobs
-  if (savingsPercent != null && savingsPercent > 50) return true;
+  // Lowered from 50 % → 30 % so GPU upscale engages more often
+  if (savingsPercent != null && savingsPercent > 30) return true;
 
   return false;
 }
@@ -286,12 +286,13 @@ async function buildVideoFilter(
     ].join(',');
   }
 
+  // Slightly stronger default chain (still very fast)
   return [
     scale,
-    'hqdn3d=1.2:1.2:2.5:2.5',
-    'eq=contrast=1.04:saturation=1.03',
-    'gradfun=1.2:8',
-    await sharpen(0.3, 'unsharp=5:5:0.9:5:5:0.45'),
+    'hqdn3d=1.5:1.5:2.8:2.8',
+    'eq=contrast=1.05:saturation=1.04',
+    'gradfun=1.3:8',
+    await sharpen(0.38, 'unsharp=5:5:1.1:5:5:0.55'),
   ].join(',');
 }
 
@@ -316,10 +317,10 @@ async function enhanceFramePng(
     : [
         scale,
         'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
-        'hqdn3d=1.2:1.2:2.5:2.5',
+        'hqdn3d=1.5:1.5:2.8:2.8',
         'eq=contrast=1.06:saturation=1.05',
-        'gradfun=1.2:8',
-        await sharpen(0.35, 'unsharp=5:5:1.2:5:5:0.6'),
+        'gradfun=1.3:8',
+        await sharpen(0.38, 'unsharp=5:5:1.2:5:5:0.6'),
       ].join(',');
 
   try {
@@ -336,9 +337,9 @@ async function enhanceFramePng(
 
   const vfB = [
     scaleCpu,
-    'hqdn3d=1.0:1.0:2:2',
+    'hqdn3d=1.2:1.2:2.2:2.2',
     'gradfun=1.2:8',
-    await sharpen(0.3, 'unsharp=5:5:1.0:5:5:0.5'),
+    await sharpen(0.32, 'unsharp=5:5:1.0:5:5:0.5'),
   ].join(',');
 
   await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
