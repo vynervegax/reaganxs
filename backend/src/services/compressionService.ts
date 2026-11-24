@@ -3,10 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 45 * 60 * 1000; // < ~800 MB
-const AV1_TIMEOUT_LARGE_MS = 75 * 60 * 1000; // ≥ ~800 MB
-const VP9_TIMEOUT_MS = 20 * 60 * 1000;
-const VP9_TIMEOUT_LARGE_MS = 35 * 60 * 1000;
+const AV1_TIMEOUT_MS = 40 * 60 * 1000; // < ~800 MB (slightly tighter)
+const AV1_TIMEOUT_LARGE_MS = 65 * 60 * 1000; // ≥ ~800 MB
+const VP9_TIMEOUT_MS = 15 * 60 * 1000;
+const VP9_TIMEOUT_LARGE_MS = 28 * 60 * 1000;
 
 const LARGE_MB = 800;
 
@@ -26,9 +26,13 @@ function vp9TimeoutFor(inputPath: string): number {
   return inputMb(inputPath) >= LARGE_MB ? VP9_TIMEOUT_LARGE_MS : VP9_TIMEOUT_MS;
 }
 
-/** Slightly faster preset only for very large inputs; CRF stays the same */
+/**
+ * Faster presets for speed.
+ * 9 is a good speed/quality balance; 11 for very large files.
+ * CRF stays 28 so quality remains close to current.
+ */
 function av1PresetFor(inputPath: string): string {
-  return inputMb(inputPath) >= LARGE_MB ? '10' : COMPRESS.av1.preset;
+  return inputMb(inputPath) >= LARGE_MB ? '11' : '9';
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -62,10 +66,6 @@ function run(args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
-/**
- * Prefer copy when source is already Opus; otherwise re-encode.
- * Small speed + quality win on the common case.
- */
 function probeAudioCodec(inputPath: string): Promise<string | null> {
   return new Promise((resolve) => {
     const p = spawn('ffprobe', [
@@ -128,7 +128,7 @@ export const compressionService = {
       `[compress] input=${mb.toFixed(1)}MB av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset}`
     );
 
-    // Full resolution — no scale (quality-first)
+    // Full resolution — no scale (keeps current quality)
     try {
       await run(
         [
@@ -138,9 +138,9 @@ export const compressionService = {
           '-map', '0:a:0?',
           '-c:v', COMPRESS.av1.codec,
           '-preset', av1Preset,
-          '-crf', COMPRESS.av1.crf,
+          '-crf', COMPRESS.av1.crf,          // stays 28
           '-pix_fmt', 'yuv420p',
-          '-svtav1-params', 'lp=1:tune=0',
+          '-svtav1-params', 'lp=1:tune=0',   // tune=0 keeps perceptual quality
           '-threads', '2',
           ...audio,
           '-movflags', '+faststart',
@@ -161,8 +161,7 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    // VP9 fallback — a bit less extreme than pure realtime so quality holds up better
-    // Still fast enough for the timeout budget
+    // Fast VP9 fallback — still CRF 28, but prioritizes speed
     await run(
       [
         '-hide_banner', '-y',
@@ -172,8 +171,8 @@ export const compressionService = {
         '-c:v', COMPRESS.vp9.codec,
         '-crf', COMPRESS.vp9.crf,
         '-b:v', '0',
-        '-cpu-used', '6',          // was 8 — slightly better quality
-        '-deadline', 'good',       // was realtime — better quality, still reasonably fast
+        '-cpu-used', '8',
+        '-deadline', 'realtime',
         '-row-mt', '1',
         '-threads', '2',
         '-pix_fmt', 'yuv420p',
