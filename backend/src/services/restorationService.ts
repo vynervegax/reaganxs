@@ -8,7 +8,7 @@ import {
 } from '../config/constants';
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-const FRAME_TIMEOUT_MS = 90 * 1000; // 90 s
+const FRAME_TIMEOUT_MS = 90 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -53,10 +53,6 @@ function fileSize(p: string): number {
   }
 }
 
-/**
- * Sharpener selection — CAS preferred; unsharp fallback.
- * Probed once per process.
- */
 let sharpenerProbe: Promise<boolean> | null = null;
 
 function hasCas(): Promise<boolean> {
@@ -82,17 +78,10 @@ function hasCas(): Promise<boolean> {
   return sharpenerProbe;
 }
 
-async function sharpen(
-  casStrength: number,
-  unsharpFallback: string
-): Promise<string> {
+async function sharpen(casStrength: number, unsharpFallback: string): Promise<string> {
   return (await hasCas()) ? `cas=${casStrength}` : unsharpFallback;
 }
 
-/**
- * Filter availability probe (libplacebo / scale_npp).
- * Probed once per process.
- */
 let filterProbe: Promise<{ hasPlacebo: boolean; hasNpp: boolean }> | null = null;
 
 function probeFilters(): Promise<{ hasPlacebo: boolean; hasNpp: boolean }> {
@@ -121,9 +110,6 @@ function probeFilters(): Promise<{ hasPlacebo: boolean; hasNpp: boolean }> {
   return filterProbe;
 }
 
-/**
- * Audio strategy — copy Opus when possible; otherwise re-encode to libopus.
- */
 function probeAudioCodec(inputPath: string): Promise<string | null> {
   return new Promise((resolve) => {
     const p = spawn('ffprobe', [
@@ -133,13 +119,11 @@ function probeAudioCodec(inputPath: string): Promise<string | null> {
       '-of', 'default=noprint_wrappers=1:nokey=1',
       inputPath,
     ]);
-
     let out = '';
     const timer = setTimeout(() => {
       p.kill('SIGKILL');
       resolve(null);
     }, 10_000);
-
     p.stdout.on('data', (d) => (out += d.toString()));
     p.on('close', () => {
       clearTimeout(timer);
@@ -154,16 +138,10 @@ function probeAudioCodec(inputPath: string): Promise<string | null> {
 
 async function audioArgs(inputPath: string): Promise<string[]> {
   const codec = await probeAudioCodec(inputPath);
-  if (codec === 'opus') {
-    return ['-c:a', 'copy'];
-  }
+  if (codec === 'opus') return ['-c:a', 'copy'];
   return ['-c:a', 'libopus', '-b:a', '96k', '-ac', '2', '-ar', '48000'];
 }
 
-/**
- * Full-timeline restore encode.
- * On AV1 failure/timeout, throw so the caller can decide next steps.
- */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -198,74 +176,47 @@ async function encodeAv1OrVp9(
       fs.renameSync(av1, outPath);
       return 'libsvtav1';
     }
-
     throw new Error('Full restore AV1 produced empty output');
   } catch (e: any) {
     const msg = e?.message || String(e);
-    console.warn(
-      '[restore] full AV1 failed/timed out',
-      msg.slice?.(0, 200) || msg
-    );
+    console.warn('[restore] full AV1 failed/timed out', msg.slice?.(0, 200) || msg);
     throw e instanceof Error ? e : new Error(msg);
   }
 }
 
-/** Decide whether to use the stronger filter chain. */
-function shouldUseAggressive(
-  opts: RestoreOptions,
-  durationSec?: number,
-  savingsPercent?: number
-): boolean {
+function shouldUseAggressive(opts: RestoreOptions, savingsPercent?: number): boolean {
   if (opts.forceAggressive) return true;
   if (opts.forceLight) return false;
-
-  // Lowered from 50 % → 35 % so more jobs get the stronger chain
   if (savingsPercent != null && savingsPercent > 35) return true;
-
   return false;
 }
 
-/** Decide whether to upscale (model-free). */
-function shouldUpscale(
-  opts: RestoreOptions,
-  savingsPercent?: number
-): boolean {
+function shouldUpscale(opts: RestoreOptions, savingsPercent?: number): boolean {
   if (opts.forceUpscale) return true;
   if (opts.forceNoUpscale) return false;
-
   const factor = opts.upscaleFactor ?? 1;
   if (factor <= 1) return false;
-
-  // Keep the 30 % gate so we only upscale when compression was effective
   if (savingsPercent != null && savingsPercent > 30) return true;
-
   return false;
 }
 
-async function buildScaleFilter(
-  maxWidth: number,
-  upscaleFactor: number,
-  preferGpu = true
-): Promise<string> {
-  // ----- Upscale path: no maxWidth cap (max output) -----
+async function buildScaleFilter(maxWidth: number, upscaleFactor: number, preferGpu = true): Promise<string> {
+  // Upscale path: no maxWidth cap (max output)
   if (upscaleFactor > 1 && preferGpu) {
     const { hasPlacebo, hasNpp } = await probeFilters();
-
     if (hasPlacebo) {
       return `libplacebo=w=trunc(iw*${upscaleFactor}/2)*2:h=trunc(ih*${upscaleFactor}/2)*2:upscaler=ewa_lanczos:deband=1:deband_iterations=1`;
     }
-
     if (hasNpp) {
       return `scale_npp=w=trunc(iw*${upscaleFactor}/2)*2:h=trunc(ih*${upscaleFactor}/2)*2:interp_algo=lanczos`;
     }
   }
 
   if (upscaleFactor > 1) {
-    // CPU fallback — still no maxWidth cap
     return `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`;
   }
 
-  // ----- Non-upscale path: respect maxWidth -----
+  // Non-upscale: respect maxWidth (quality-oriented Lanczos)
   return `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
 }
 
@@ -277,72 +228,53 @@ async function buildVideoFilter(
   const scale = await buildScaleFilter(maxWidth, upscaleFactor);
 
   if (aggressive) {
+    // Stronger chain (closer to the old high-quality version)
     return [
       scale,
-      'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
-      'hqdn3d=2.0:2.0:3:3',
-      'eq=contrast=1.05:saturation=1.04',
-      'gradfun=1.5:8',
-      await sharpen(0.45, 'unsharp=5:5:1.4:5:5:0.7'),
+      'hqdn3d=1.8:1.8:3.0:3.0',
+      'eq=contrast=1.06:saturation=1.05',
+      await sharpen(0.42, 'unsharp=5:5:1.3:5:5:0.65'),
     ].join(',');
   }
 
-  // Slightly stronger default chain (still very fast)
+  // Default chain — quality-focused but still fast (matches the old “best” feel)
   return [
     scale,
-    'hqdn3d=1.5:1.5:2.8:2.8',
+    'hqdn3d=1.4:1.4:2.8:2.8',
     'eq=contrast=1.05:saturation=1.04',
-    'gradfun=1.3:8',
-    await sharpen(0.38, 'unsharp=5:5:1.1:5:5:0.55'),
+    await sharpen(0.36, 'unsharp=5:5:1.1:5:5:0.55'),
   ].join(',');
 }
 
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
-  /** Force the stronger filter chain */
   forceAggressive?: boolean;
-  /** Force the light filter chain */
   forceLight?: boolean;
-  /** Optional: duration in seconds (used by the gate) */
   durationSec?: number;
-  /** Optional: savings percent (used by the gate) */
   savingsPercent?: number;
-  /** Model-free upscale factor (1 = none, 1.5 or 2 typical). Even output dimensions enforced. */
   upscaleFactor?: number;
-  /** Force upscale regardless of savings */
   forceUpscale?: boolean;
-  /** Force no upscale */
   forceNoUpscale?: boolean;
 };
 
 export const restorationService = {
   weightPath(modelId: string) {
-    return path.join(
-      MODELS_DIR,
-      MODEL_FILES[modelId] || MODEL_FILES['atd-webphoto']
-    );
+    return path.join(MODELS_DIR, MODEL_FILES[modelId] || MODEL_FILES['atd-webphoto']);
   },
 
   displayName(modelId: string) {
     return MODEL_DISPLAY[modelId] || modelId;
   },
 
-  async restore(
-    inputPath: string,
-    model: string,
-    opts: RestoreOptions = {}
-  ): Promise<string> {
+  async restore(inputPath: string, model: string, opts: RestoreOptions = {}): Promise<string> {
     if (!fs.existsSync(inputPath)) {
       throw new Error(`Restore input missing: ${inputPath}`);
     }
 
     const dir = path.dirname(inputPath);
     const stem = path.basename(inputPath, path.extname(inputPath));
-    const outPath = path.join(
-      dir,
-      `${stem}_restored_${model.replace(/[^\w.-]+/g, '_')}.mp4`
-    );
+    const outPath = path.join(dir, `${stem}_restored_${model.replace(/[^\w.-]+/g, '_')}.mp4`);
 
     try {
       await this.runModelWorker(inputPath, outPath, model, opts);
@@ -357,12 +289,7 @@ export const restorationService = {
     return outPath;
   },
 
-  async runModelWorker(
-    _input: string,
-    _out: string,
-    model: string,
-    _opts: RestoreOptions
-  ): Promise<void> {
+  async runModelWorker(_input: string, _out: string, model: string, _opts: RestoreOptions): Promise<void> {
     const weights = this.weightPath(model);
     if (!fs.existsSync(weights)) {
       throw new Error(`Weight missing: ${weights}`);
@@ -370,30 +297,18 @@ export const restorationService = {
     throw new Error(`Model worker not configured for ${model}`);
   },
 
-  async ffmpegEnhance(
-    inputPath: string,
-    outPath: string,
-    opts: RestoreOptions = {}
-  ): Promise<void> {
+  async ffmpegEnhance(inputPath: string, outPath: string, opts: RestoreOptions = {}): Promise<void> {
     let source = inputPath;
     const workDir = path.dirname(outPath);
 
     if (opts.maxSeconds && opts.maxSeconds > 0) {
       const slice = path.join(workDir, `slice_${Date.now()}.mp4`);
-      await run(
-        ['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice],
-        FRAME_TIMEOUT_MS
-      );
+      await run(['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice], FRAME_TIMEOUT_MS);
       source = slice;
     }
 
     const maxWidth = opts.maxWidth ?? 1920;
-    const aggressive = shouldUseAggressive(
-      opts,
-      opts.durationSec,
-      opts.savingsPercent
-    );
-
+    const aggressive = shouldUseAggressive(opts, opts.savingsPercent);
     const doUpscale = shouldUpscale(opts, opts.savingsPercent);
     const upscaleFactor = doUpscale ? (opts.upscaleFactor ?? 2) : 1;
 
