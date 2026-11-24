@@ -13,7 +13,6 @@ import { savingsService } from '../services/savingsService';
 import { qualityMetricsService } from '../services/qualityMetricsService';
 import {
   COMPRESSION_ONLY,
-  PARTIAL_BY_TIER,
   UPLOAD_TEMP_DIR,
 } from '../config/constants';
 import { MEDIA_KINDS } from '../config/mediaKinds';
@@ -45,52 +44,6 @@ function expiryHoursForTier(tier: UserTier): number {
   if (h === 0) return 0;
   if (typeof h === 'number' && h > 0) return h;
   return 24;
-}
-
-/** 2 frames only — no quality sample clip */
-async function runPartialRestore(opts: {
-  compressedPath: string;
-  model: string;
-  partialOpts: { frameCount: number; maxWidth: number };
-  temps: string[];
-  originalSize: number;
-}): Promise<{
-  previewFrameUrls: string[];
-  previewClipUrl: string | null;
-  frameCount: number;
-  sampleKeys: string[];
-}> {
-  const { compressedPath, model, partialOpts, temps } = opts;
-
-  const previewFrameUrls: string[] = [];
-  const sampleKeys: string[] = [];
-
-  const partial = await restorationService.restorePartialFrames(
-    compressedPath,
-    model,
-    {
-      frameCount: partialOpts.frameCount,
-      maxWidth: partialOpts.maxWidth,
-    }
-  );
-
-  for (const fp of partial.framePaths) {
-    try {
-      const { url, key } = await r2Service.uploadSample(fp);
-      previewFrameUrls.push(url);
-      sampleKeys.push(key);
-    } catch (upErr: any) {
-      console.warn('[worker] frame upload', upErr?.message);
-    }
-    temps.push(fp);
-  }
-
-  return {
-    previewFrameUrls,
-    previewClipUrl: null,
-    frameCount: partial.frameCount,
-    sampleKeys,
-  };
 }
 
 export const videoWorker = new Worker<VideoJobData>(
@@ -129,10 +82,6 @@ export const videoWorker = new Worker<VideoJobData>(
     const tier = (tierRaw as UserTier) || 'demo';
     const offering = PROGRESSIVE_OFFERINGS[tier] || PROGRESSIVE_OFFERINGS.demo;
     const tierExpiryHours = expiryHoursForTier(tier);
-    const partialOpts = PARTIAL_BY_TIER[tier] || {
-      frameCount: 2,
-      maxWidth: 960,
-    };
 
     const mediaKind =
       dataMediaKind || (existing as any).mediaKind || 'video';
@@ -146,17 +95,14 @@ export const videoWorker = new Worker<VideoJobData>(
     let processedPath = '';
     let compressedPath = '';
     let didRestore = false;
-    let restoreMode: 'none' | 'full' | 'partial-frames' = 'none';
+    let restoreMode: 'none' | 'full' = 'none';
     let codec = '';
-    let previewFrameUrls: string[] = [];
-    let previewClipUrl: string | null = null;
     const temps: string[] = [];
     if (originalPath) temps.push(originalPath);
 
     const r2KeysOnFail: string[] = [];
     if (r2Key) r2KeysOnFail.push(r2Key);
 
-    let sampleKeys: string[] = [];
     let finalKey: string | null = null;
     let persistedCompressedKey: string | null =
       dataCompressedKey || (existing as any).compressedKey || null;
@@ -277,7 +223,7 @@ export const videoWorker = new Worker<VideoJobData>(
         return;
       }
 
-      // ========== VIDEO PATH (unchanged successful flow) ==========
+      // ========== VIDEO PATH ==========
       let compressedSize = 0;
 
       const canResumeRestore =
@@ -397,12 +343,20 @@ export const videoWorker = new Worker<VideoJobData>(
           progress: 55,
         });
 
-        let fullAccepted = false;
         try {
+          const savingsPercentForGate = savingsService.calculate
+            ? savingsService.calculate(originalSize, compressedSize)
+            : originalSize > 0
+              ? Math.max(0, Math.round((1 - compressedSize / originalSize) * 1000) / 10)
+              : 0;
+
           const fullPath = await restorationService.restore(
             compressedPath,
             model,
-            { maxWidth: tier === 'demo' ? 960 : 1920 }
+            {
+              maxWidth: tier === 'demo' ? 960 : 1920,
+              savingsPercent: savingsPercentForGate,
+            }
           );
           temps.push(fullPath);
           const fullSize = sizeOf(fullPath);
@@ -413,46 +367,15 @@ export const videoWorker = new Worker<VideoJobData>(
             didRestore = true;
             restoreMode = 'full';
             restoreSkippedReason = null;
-            fullAccepted = true;
           } else {
-            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — partial`;
+            restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — kept compressed`;
             safeUnlink(fullPath);
+            processedPath = compressedPath;
           }
         } catch (e: any) {
-          restoreSkippedReason =
-            e?.message || 'Full restore time budget — partial';
-          console.warn('[worker] full → partial:', restoreSkippedReason);
-        }
-
-        if (!fullAccepted) {
-          try {
-            const partial = await runPartialRestore({
-              compressedPath,
-              model,
-              partialOpts,
-              temps,
-              originalSize,
-            });
-            previewFrameUrls = partial.previewFrameUrls;
-            previewClipUrl = null;
-            sampleKeys = partial.sampleKeys;
-            r2KeysOnFail.push(...sampleKeys);
-            processedPath = compressedPath;
-            modelUsed = `${model}-partial`;
-            didRestore = true;
-            restoreMode = 'partial-frames';
-            restoreSkippedReason =
-              (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-              `Partial OK (${partial.frameCount})`;
-          } catch (pfErr: any) {
-            processedPath = compressedPath;
-            modelUsed = COMPRESSION_ONLY;
-            didRestore = false;
-            restoreMode = 'none';
-            restoreSkippedReason =
-              (restoreSkippedReason ? restoreSkippedReason + ' | ' : '') +
-              (pfErr?.message || 'Partial failed');
-          }
+          restoreSkippedReason = e?.message || 'Full restore failed — kept compressed';
+          console.warn('[worker] full restore failed:', restoreSkippedReason);
+          processedPath = compressedPath;
         }
       }
 
@@ -543,7 +466,7 @@ export const videoWorker = new Worker<VideoJobData>(
         restored: didRestore,
         restoreMode,
         codec,
-        previewFrameUrls,
+        previewFrameUrls: [],
         previewClipUrl: null,
         error: null,
       });
