@@ -9,7 +9,6 @@ import {
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 const FRAME_TIMEOUT_MS = 90 * 1000; // 90 s
-const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -163,7 +162,7 @@ async function audioArgs(inputPath: string): Promise<string[]> {
 
 /**
  * Full-timeline restore encode.
- * On AV1 failure/timeout, throw so the caller switches to partial frames.
+ * On AV1 failure/timeout, throw so the caller can decide next steps.
  */
 async function encodeAv1OrVp9(
   inputPath: string,
@@ -204,7 +203,7 @@ async function encodeAv1OrVp9(
   } catch (e: any) {
     const msg = e?.message || String(e);
     console.warn(
-      '[restore] full AV1 failed/timed out — skip full VP9 → partial',
+      '[restore] full AV1 failed/timed out',
       msg.slice?.(0, 200) || msg
     );
     throw e instanceof Error ? e : new Error(msg);
@@ -237,7 +236,7 @@ function shouldUpscale(
   const factor = opts.upscaleFactor ?? 1;
   if (factor <= 1) return false;
 
-  // Lowered from 50 % → 30 % so GPU upscale engages more often
+  // Keep the 30 % gate so we only upscale when compression was effective
   if (savingsPercent != null && savingsPercent > 30) return true;
 
   return false;
@@ -248,6 +247,7 @@ async function buildScaleFilter(
   upscaleFactor: number,
   preferGpu = true
 ): Promise<string> {
+  // ----- Upscale path: no maxWidth cap (max output) -----
   if (upscaleFactor > 1 && preferGpu) {
     const { hasPlacebo, hasNpp } = await probeFilters();
 
@@ -260,11 +260,12 @@ async function buildScaleFilter(
     }
   }
 
-  // CPU fallback
   if (upscaleFactor > 1) {
+    // CPU fallback — still no maxWidth cap
     return `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`;
   }
 
+  // ----- Non-upscale path: respect maxWidth -----
   return `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
 }
 
@@ -296,55 +297,6 @@ async function buildVideoFilter(
   ].join(',');
 }
 
-async function enhanceFramePng(
-  src: string,
-  dest: string,
-  maxWidth: number,
-  aggressive = false,
-  upscaleFactor = 1
-): Promise<void> {
-  const scale = await buildScaleFilter(maxWidth, upscaleFactor);
-
-  const vfA = aggressive
-    ? [
-        scale,
-        'atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04',
-        'hqdn3d=1.8:1.8:2.5:2.5',
-        'eq=contrast=1.06:saturation=1.05',
-        'gradfun=1.5:8',
-        await sharpen(0.4, 'unsharp=5:5:1.3:5:5:0.65'),
-      ].join(',')
-    : [
-        scale,
-        'atadenoise=0a=0.01:0b=0.02:1a=0.01:1b=0.02',
-        'hqdn3d=1.5:1.5:2.8:2.8',
-        'eq=contrast=1.06:saturation=1.05',
-        'gradfun=1.3:8',
-        await sharpen(0.38, 'unsharp=5:5:1.2:5:5:0.6'),
-      ].join(',');
-
-  try {
-    await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
-    if (fileSize(dest) > 0) return;
-  } catch {
-    /* fall through */
-  }
-
-  // Fallback: simpler chain (CPU scale only)
-  const scaleCpu = upscaleFactor > 1
-    ? `scale=trunc(iw*${upscaleFactor}/2)*2:trunc(ih*${upscaleFactor}/2)*2:flags=lanczos+accurate_rnd+full_chroma_int`
-    : `scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd+full_chroma_int`;
-
-  const vfB = [
-    scaleCpu,
-    'hqdn3d=1.2:1.2:2.2:2.2',
-    'gradfun=1.2:8',
-    await sharpen(0.32, 'unsharp=5:5:1.0:5:5:0.5'),
-  ].join(',');
-
-  await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
-}
-
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
@@ -362,14 +314,6 @@ export type RestoreOptions = {
   forceUpscale?: boolean;
   /** Force no upscale */
   forceNoUpscale?: boolean;
-};
-
-export type PartialFrameResult = {
-  mode: 'partial-frames';
-  framePaths: string[];
-  frameCount: number;
-  workDir: string;
-  model: string;
 };
 
 export const restorationService = {
@@ -455,179 +399,5 @@ export const restorationService = {
 
     const vf = await buildVideoFilter(maxWidth, aggressive, upscaleFactor);
     await encodeAv1OrVp9(source, outPath, vf);
-  },
-
-  async restorePartialFrames(
-    compressedPath: string,
-    model: string,
-    opts: {
-      frameCount?: number;
-      maxWidth?: number;
-      forceAggressive?: boolean;
-      savingsPercent?: number;
-      upscaleFactor?: number;
-      forceUpscale?: boolean;
-      forceNoUpscale?: boolean;
-    } = {}
-  ): Promise<PartialFrameResult> {
-    if (!fs.existsSync(compressedPath)) {
-      throw new Error('Partial restore input missing: ' + compressedPath);
-    }
-
-    const frameCount = opts.frameCount ?? 2;
-    const maxWidth = opts.maxWidth ?? 720;
-    const aggressive = shouldUseAggressive(
-      { forceAggressive: opts.forceAggressive },
-      undefined,
-      opts.savingsPercent
-    );
-
-    const doUpscale = shouldUpscale(opts, opts.savingsPercent);
-    const upscaleFactor = doUpscale ? (opts.upscaleFactor ?? 2) : 1;
-
-    const dir = path.dirname(compressedPath);
-    const stem = path.basename(compressedPath, path.extname(compressedPath));
-    const workDir = path.join(dir, `${stem}_partial_${Date.now()}`);
-    const framesIn = path.join(workDir, 'in');
-    const framesOut = path.join(workDir, 'out');
-    fs.mkdirSync(framesIn, { recursive: true });
-    fs.mkdirSync(framesOut, { recursive: true });
-
-    const patternIn = path.join(framesIn, 'frame_%03d.png');
-
-    const extractArgs = (seek?: string): string[] => [
-      ...(seek ? ['-ss', seek] : []),
-      '-i', compressedPath,
-      '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos+accurate_rnd`,
-      '-frames:v', String(frameCount),
-      patternIn,
-    ];
-
-    const readFrames = (): string[] =>
-      fs
-        .readdirSync(framesIn)
-        .filter((f) => f.endsWith('.png'))
-        .sort()
-        .map((f) => path.join(framesIn, f));
-
-    try {
-      await run(extractArgs('1'), PARTIAL_EXTRACT_TIMEOUT_MS);
-    } catch {
-      /* retry from t=0 */
-    }
-
-    let inputs = readFrames();
-
-    if (inputs.length === 0) {
-      await run(extractArgs(), PARTIAL_EXTRACT_TIMEOUT_MS);
-      inputs = readFrames();
-    }
-
-    if (inputs.length === 0) {
-      throw new Error('No frames extracted for partial restore');
-    }
-
-    const framePaths: string[] = [];
-
-    for (let i = 0; i < inputs.length; i++) {
-      const src = inputs[i];
-      const dest = path.join(
-        framesOut,
-        `restored_${String(i).padStart(3, '0')}.png`
-      );
-
-      try {
-        await enhanceFramePng(src, dest, maxWidth, aggressive, upscaleFactor);
-      } catch {
-        try {
-          fs.copyFileSync(src, dest);
-        } catch {
-          continue;
-        }
-      }
-
-      if (fs.existsSync(dest) && fileSize(dest) > 0) {
-        framePaths.push(dest);
-      }
-    }
-
-    if (framePaths.length === 0) {
-      throw new Error('Partial restore produced no frames');
-    }
-
-    return {
-      mode: 'partial-frames',
-      framePaths,
-      frameCount: framePaths.length,
-      workDir,
-      model,
-    };
-  },
-
-  async framesToPreviewClip(
-    framePaths: string[],
-    outPath: string,
-    fps = 2
-  ): Promise<string> {
-    if (framePaths.length === 0) {
-      throw new Error('No frames for preview clip');
-    }
-
-    const listFile = path.join(
-      path.dirname(outPath),
-      `concat_${Date.now()}.txt`
-    );
-    const body = framePaths
-      .map((p) => `file '${p.replace(/'/g, `'\\''`)}'`)
-      .join('\n');
-    fs.writeFileSync(listFile, body);
-
-    const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
-
-    try {
-      await run(
-        [
-          '-f', 'concat', '-safe', '0',
-          '-r', String(fps),
-          '-i', listFile,
-          '-c:v', 'libsvtav1',
-          '-preset', '10',
-          '-crf', '28',
-          '-svtav1-params', 'lp=1:tune=0',
-          '-threads', '2',
-          '-an',
-          raw,
-        ],
-        PARTIAL_EXTRACT_TIMEOUT_MS
-      );
-    } catch {
-      await run(
-        [
-          '-f', 'concat', '-safe', '0',
-          '-r', String(fps),
-          '-i', listFile,
-          '-c:v', 'libvpx-vp9',
-          '-crf', '28',
-          '-b:v', '0',
-          '-cpu-used', '5',
-          '-an',
-          raw,
-        ],
-        PARTIAL_EXTRACT_TIMEOUT_MS
-      );
-    }
-
-    if (fileSize(raw) === 0) {
-      throw new Error('Preview clip empty');
-    }
-    fs.renameSync(raw, outPath);
-
-    try {
-      fs.unlinkSync(listFile);
-    } catch {
-      /* ignore */
-    }
-
-    return outPath;
   },
 };
