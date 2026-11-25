@@ -9,7 +9,6 @@ import {
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
-const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -56,14 +55,13 @@ function fileSize(p: string): number {
 
 /**
  * Full-timeline restore encode.
- * Speed rule: if AV1 times out or fails, do NOT run another full VP9 pass —
- * throw so the worker switches to partial frames (same quality samples, ~10 min saved).
+ * On AV1 failure/timeout, throw so the caller can handle it (no partial-frames fallback).
  */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
   vf?: string
-): Promise<'libsvtav1' | 'libvpx-vp9'> {
+): Promise<'libsvtav1'> {
   const videoFilter = vf ? ['-vf', vf] : [];
   const av1 = outPath.replace(/(\.\w+)?$/, '_av1.mp4');
 
@@ -96,59 +94,20 @@ async function encodeAv1OrVp9(
       return 'libsvtav1';
     }
 
-    // Empty output without throw — treat as failure for full path
     throw new Error('Full restore AV1 produced empty output');
   } catch (e: any) {
     const msg = e?.message || String(e);
     console.warn(
-      '[restore] full AV1 failed/timed out — skip full VP9 → partial',
+      '[restore] full AV1 failed/timed out',
       msg.slice?.(0, 200) || msg
     );
-    // Do not start a second full-timeline VP9 enhance (saves ~10 min on large jobs)
     throw e instanceof Error ? e : new Error(msg);
   }
-}
-
-async function enhanceFramePng(
-  src: string,
-  dest: string,
-  maxWidth: number
-): Promise<void> {
-  const vfA = [
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-    'hqdn3d=1.5:1.5:3:3',
-    'eq=contrast=1.06:brightness=0.02:saturation=1.05',
-    'unsharp=5:5:1.2:5:5:0.6',
-  ].join(',');
-
-  try {
-    await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
-    if (fileSize(dest) > 0) return;
-  } catch {
-    /* fall through */
-  }
-
-  const vfB = [
-    'scale=iw*2:ih*2:flags=lanczos',
-    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-    'hqdn3d=1.0:1.0:2:2',
-    'unsharp=5:5:1.0:5:5:0.5',
-  ].join(',');
-
-  await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
 }
 
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
-};
-
-export type PartialFrameResult = {
-  mode: 'partial-frames';
-  framePaths: string[];
-  frameCount: number;
-  workDir: string;
-  model: string;
 };
 
 export const restorationService = {
@@ -231,150 +190,5 @@ export const restorationService = {
     ].join(',');
 
     await encodeAv1OrVp9(source, outPath, vf);
-  },
-
-  async restorePartialFrames(
-    compressedPath: string,
-    model: string,
-    opts: { frameCount?: number; maxWidth?: number } = {}
-  ): Promise<PartialFrameResult> {
-    if (!fs.existsSync(compressedPath)) {
-      throw new Error(`Partial restore input missing: ${compressedPath}`);
-    }
-
-    const frameCount = opts.frameCount ?? 2;
-    const maxWidth = opts.maxWidth ?? 720;
-    const dir = path.dirname(compressedPath);
-    const stem = path.basename(compressedPath, path.extname(compressedPath));
-    const workDir = path.join(dir, `${stem}_partial_${Date.now()}`);
-    const framesIn = path.join(workDir, 'in');
-    const framesOut = path.join(workDir, 'out');
-    fs.mkdirSync(framesIn, { recursive: true });
-    fs.mkdirSync(framesOut, { recursive: true });
-
-    const patternIn = path.join(framesIn, 'frame_%03d.png');
-    await run(
-      [
-        '-i', compressedPath,
-        '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-        '-frames:v', String(frameCount),
-        patternIn,
-      ],
-      PARTIAL_EXTRACT_TIMEOUT_MS
-    );
-
-    const inputs = fs
-      .readdirSync(framesIn)
-      .filter((f) => f.endsWith('.png'))
-      .sort()
-      .map((f) => path.join(framesIn, f));
-
-    if (inputs.length === 0) {
-      throw new Error('No frames extracted for partial restore');
-    }
-
-    const framePaths: string[] = [];
-
-    for (let i = 0; i < inputs.length; i++) {
-      const src = inputs[i];
-      const dest = path.join(
-        framesOut,
-        `restored_${String(i).padStart(3, '0')}.png`
-      );
-
-      try {
-        await enhanceFramePng(src, dest, maxWidth);
-      } catch {
-        try {
-          fs.copyFileSync(src, dest);
-        } catch {
-          continue;
-        }
-      }
-
-      if (fs.existsSync(dest) && fileSize(dest) > 0) {
-        framePaths.push(dest);
-      }
-    }
-
-    if (framePaths.length === 0) {
-      throw new Error('Partial restore produced no frames');
-    }
-
-    return {
-      mode: 'partial-frames',
-      framePaths,
-      frameCount: framePaths.length,
-      workDir,
-      model,
-    };
-  },
-
-  async framesToPreviewClip(
-    framePaths: string[],
-    outPath: string,
-    fps = 2
-  ): Promise<string> {
-    if (framePaths.length === 0) {
-      throw new Error('No frames for preview clip');
-    }
-
-    const listFile = path.join(
-      path.dirname(outPath),
-      `concat_${Date.now()}.txt`
-    );
-    const body = framePaths
-      .map((p) => `file '${p.replace(/'/g, `'\\''`)}'`)
-      .join('\n');
-    fs.writeFileSync(listFile, body);
-
-    const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
-
-    // Preview clip is tiny — VP9-only is fine for speed
-    try {
-      await run(
-        [
-          '-f', 'concat', '-safe', '0',
-          '-r', String(fps),
-          '-i', listFile,
-          '-c:v', 'libsvtav1',
-          '-preset', '10',
-          '-crf', '28',
-          '-svtav1-params', 'lp=1',
-          '-threads', '2',
-          '-an',
-          raw,
-        ],
-        PARTIAL_EXTRACT_TIMEOUT_MS
-      );
-    } catch {
-      await run(
-        [
-          '-f', 'concat', '-safe', '0',
-          '-r', String(fps),
-          '-i', listFile,
-          '-c:v', 'libvpx-vp9',
-          '-crf', '28',
-          '-b:v', '0',
-          '-cpu-used', '5',
-          '-an',
-          raw,
-        ],
-        PARTIAL_EXTRACT_TIMEOUT_MS
-      );
-    }
-
-    if (fileSize(raw) === 0) {
-      throw new Error('Preview clip empty');
-    }
-    fs.renameSync(raw, outPath);
-
-    try {
-      fs.unlinkSync(listFile);
-    } catch {
-      /* ignore */
-    }
-
-    return outPath;
   },
 };
