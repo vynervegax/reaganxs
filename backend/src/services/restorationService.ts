@@ -108,6 +108,7 @@ async function encodeAv1OrVp9(
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
+savingsPercent?: number;
 };
 
 export const restorationService = {
