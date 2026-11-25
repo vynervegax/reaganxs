@@ -5,11 +5,11 @@ import { COMPRESS } from '../config/constants';
 
 const AV1_TIMEOUT_MS = 35 * 60 * 1000;        // < 800 MB
 const AV1_TIMEOUT_LARGE_MS = 50 * 60 * 1000;  // 800–1500 MB
-const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // ≥ 1500 MB (shorter, force faster path)
+const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // ≥ 1500 MB
 
 const VP9_TIMEOUT_MS = 15 * 60 * 1000;
 const VP9_TIMEOUT_LARGE_MS = 25 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 35 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // longer for huge
 
 const LARGE_MB = 800;
 const HUGE_MB = 1500;
@@ -42,11 +42,18 @@ function vp9TimeoutFor(mb: number): number {
   return VP9_TIMEOUT_MS;
 }
 
-/** Faster presets on big files so they finish. CRF stays 28. */
 function av1PresetFor(mb: number): string {
   if (mb >= HUGE_MB) return '12';
   if (mb >= LARGE_MB) return '10';
   return '8';
+}
+
+/** Light downscale only on huge files so encoding can finish. */
+function scaleArgs(mb: number): string[] {
+  if (mb >= HUGE_MB) {
+    return ['-vf', 'scale=min(1280\\,iw):-2'];
+  }
+  return [];
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -132,15 +139,14 @@ export const compressionService = {
     const vp9Timeout = vp9TimeoutFor(mb);
     const av1Preset = av1PresetFor(mb);
     const audio = await audioArgs(inputPath);
+    const scale = scaleArgs(mb);
 
-    // For huge files skip AV1 entirely — it almost never finishes in time
     const skipAv1 = cls === 'huge';
 
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB class=${cls} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset}`
+      `[compress] input=${mb.toFixed(1)}MB class=${cls} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset} scale=${scale.length > 0}`
     );
 
-    // Full resolution — no scale
     if (!skipAv1) {
       try {
         await run(
@@ -151,10 +157,11 @@ export const compressionService = {
             '-map', '0:a:0?',
             '-c:v', COMPRESS.av1.codec,
             '-preset', av1Preset,
-            '-crf', COMPRESS.av1.crf,          // 28
+            '-crf', COMPRESS.av1.crf,
             '-pix_fmt', 'yuv420p',
             '-svtav1-params', 'lp=1:tune=0',
             '-threads', '2',
+            ...scale,
             ...audio,
             '-movflags', '+faststart',
             '-sn',
@@ -175,7 +182,6 @@ export const compressionService = {
       }
     }
 
-    // VP9 fallback — faster settings on huge files
     const cpuUsed = cls === 'huge' ? '8' : cls === 'large' ? '7' : '6';
     const deadline = cls === 'huge' ? 'realtime' : 'good';
 
@@ -186,13 +192,14 @@ export const compressionService = {
         '-map', '0:v:0',
         '-map', '0:a:0?',
         '-c:v', COMPRESS.vp9.codec,
-        '-crf', COMPRESS.vp9.crf,             // 28
+        '-crf', COMPRESS.vp9.crf,
         '-b:v', '0',
         '-cpu-used', cpuUsed,
         '-deadline', deadline,
         '-row-mt', '1',
         '-threads', '2',
         '-pix_fmt', 'yuv420p',
+        ...scale,
         ...audio,
         '-sn',
         vp9,
