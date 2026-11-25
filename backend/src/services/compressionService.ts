@@ -3,16 +3,17 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 35 * 60 * 1000;        // < 800 MB
-const AV1_TIMEOUT_LARGE_MS = 50 * 60 * 1000;  // 800–1500 MB
-const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // ≥ 1500 MB
+const AV1_TIMEOUT_MS = 20 * 60 * 1000;           // < 500 MB
+const AV1_TIMEOUT_LARGE_MS = 30 * 60 * 1000;     // 500–1000 MB
+const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // ≥ 1000 MB
 
-const VP9_TIMEOUT_MS = 15 * 60 * 1000;
-const VP9_TIMEOUT_LARGE_MS = 25 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // longer for huge
+const VP9_TIMEOUT_MS = 8 * 60 * 1000;
+const VP9_TIMEOUT_LARGE_MS = 12 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;
 
-const LARGE_MB = 800;
-const HUGE_MB = 1500;
+const SKIP_AV1_MB = 500;
+const LARGE_MB = 500;
+const HUGE_MB = 1000;
 
 function inputMb(inputPath: string): number {
   try {
@@ -42,18 +43,25 @@ function vp9TimeoutFor(mb: number): number {
   return VP9_TIMEOUT_MS;
 }
 
+/** Relaxed default presets (speed still prioritised on large files) */
 function av1PresetFor(mb: number): string {
   if (mb >= HUGE_MB) return '12';
-  if (mb >= LARGE_MB) return '10';
-  return '8';
+  if (mb >= LARGE_MB) return '11';
+  return '9';
 }
 
-/** Light downscale only on huge files so encoding can finish. */
-function scaleArgs(mb: number): string[] {
-  if (mb >= HUGE_MB) {
-    return ['-vf', 'scale=min(1280\\,iw):-2'];
-  }
-  return [];
+/** Relaxed default CRF — higher quality than before */
+function av1CrfFor(mb: number): string {
+  if (mb >= HUGE_MB) return '30';
+  if (mb >= LARGE_MB) return '29';
+  return '28';
+}
+
+/** Stronger CRF used only when savings < 50 % */
+function av1CrfAggressiveFor(mb: number): string {
+  if (mb >= HUGE_MB) return '34';
+  if (mb >= LARGE_MB) return '33';
+  return '32';
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -85,41 +93,9 @@ function run(args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
-function probeAudioCodec(inputPath: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const p = spawn('ffprobe', [
-      '-v', 'error',
-      '-select_streams', 'a:0',
-      '-show_entries', 'stream=codec_name',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
-      inputPath,
-    ]);
-    let out = '';
-    const timer = setTimeout(() => {
-      p.kill('SIGKILL');
-      resolve(null);
-    }, 10_000);
-    p.stdout.on('data', (d) => (out += d.toString()));
-    p.on('close', () => {
-      clearTimeout(timer);
-      resolve(out.trim() || null);
-    });
-    p.on('error', () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-  });
-}
-
-async function audioArgs(inputPath: string): Promise<string[]> {
-  const codec = await probeAudioCodec(inputPath);
-  if (codec === 'opus') return ['-c:a', 'copy'];
-  return [
-    '-c:a', COMPRESS.audio.codec,
-    '-b:a', COMPRESS.audio.bitrate,
-    '-ac', COMPRESS.audio.channels,
-    '-ar', COMPRESS.audio.rate,
-  ];
+function savingsPercent(originalBytes: number, compressedBytes: number): number {
+  if (originalBytes <= 0) return 0;
+  return ((originalBytes - compressedBytes) / originalBytes) * 100;
 }
 
 export const compressionService = {
@@ -127,6 +103,7 @@ export const compressionService = {
     outputPath: string;
     codec: string;
     compressedSize: number;
+    savingsPercent: number;
   }> {
     const dir = path.dirname(inputPath);
     const stem = path.basename(inputPath, path.extname(inputPath));
@@ -134,19 +111,38 @@ export const compressionService = {
     const vp9 = path.join(dir, `${stem}_vp9.webm`);
 
     const mb = inputMb(inputPath);
-    const cls = sizeClass(mb);
+    const originalSize = fs.statSync(inputPath).size;
     const av1Timeout = av1TimeoutFor(mb);
     const vp9Timeout = vp9TimeoutFor(mb);
     const av1Preset = av1PresetFor(mb);
-    const audio = await audioArgs(inputPath);
-    const scale = scaleArgs(mb);
-
-    const skipAv1 = cls === 'huge';
+    const av1Crf = av1CrfFor(mb);
+    const skipAv1 = mb >= SKIP_AV1_MB;
 
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB class=${cls} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset} scale=${scale.length > 0}`
+      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} skipAv1=${skipAv1} preset=${av1Preset} crf=${av1Crf}`
     );
 
+    const audio = [
+      '-c:a', COMPRESS.audio.codec,
+      '-b:a', COMPRESS.audio.bitrate,
+      '-ac', COMPRESS.audio.channels,
+      '-ar', COMPRESS.audio.rate,
+    ];
+
+    const scale =
+      mb >= 1500
+        ? ['-vf', 'scale=min(1280\\,iw):-2']
+        : mb >= HUGE_MB
+          ? ['-vf', 'scale=min(1600\\,iw):-2']
+          : mb >= LARGE_MB
+            ? ['-vf', 'scale=min(1920\\,iw):-2']
+            : [];
+
+    let finalPath = '';
+    let finalCodec = '';
+    let finalSize = 0;
+
+    // ---------- First pass (relaxed) ----------
     if (!skipAv1) {
       try {
         await run(
@@ -157,7 +153,7 @@ export const compressionService = {
             '-map', '0:a:0?',
             '-c:v', COMPRESS.av1.codec,
             '-preset', av1Preset,
-            '-crf', COMPRESS.av1.crf,
+            '-crf', av1Crf,
             '-pix_fmt', 'yuv420p',
             '-svtav1-params', 'lp=1:tune=0',
             '-threads', '2',
@@ -171,50 +167,113 @@ export const compressionService = {
         );
 
         if (fs.existsSync(av1) && fs.statSync(av1).size > 0) {
-          return {
-            outputPath: av1,
-            codec: COMPRESS.av1.codec,
-            compressedSize: fs.statSync(av1).size,
-          };
+          finalPath = av1;
+          finalCodec = COMPRESS.av1.codec;
+          finalSize = fs.statSync(av1).size;
         }
       } catch (e: any) {
-        console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
+        console.warn('[compress] AV1 first pass failed → VP9', e?.message?.slice?.(0, 200));
       }
     }
 
-    const cpuUsed = cls === 'huge' ? '8' : cls === 'large' ? '7' : '6';
-    const deadline = cls === 'huge' ? 'realtime' : 'good';
+    // ---------- Second pass (more aggressive) only if savings < 50 % ----------
+    if (finalPath) {
+      const savings = savingsPercent(originalSize, finalSize);
+      console.log(`[compress] first-pass savings=${savings.toFixed(1)}%`);
 
-    await run(
-      [
-        '-hide_banner', '-y',
-        '-i', inputPath,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', COMPRESS.vp9.codec,
-        '-crf', COMPRESS.vp9.crf,
-        '-b:v', '0',
-        '-cpu-used', cpuUsed,
-        '-deadline', deadline,
-        '-row-mt', '1',
-        '-threads', '2',
-        '-pix_fmt', 'yuv420p',
-        ...scale,
-        ...audio,
-        '-sn',
-        vp9,
-      ],
-      vp9Timeout
-    );
+      if (savings < 50 && !skipAv1) {
+        console.log('[compress] savings < 50% → second pass (more aggressive)');
+        const aggressiveCrf = av1CrfAggressiveFor(mb);
+        const aggressivePath = path.join(dir, `${stem}_av1_aggressive.mp4`);
 
-    if (!fs.existsSync(vp9) || fs.statSync(vp9).size === 0) {
-      throw new Error('Compression failed (empty output)');
+        try {
+          await run(
+            [
+              '-hide_banner', '-y',
+              '-i', inputPath,
+              '-map', '0:v:0',
+              '-map', '0:a:0?',
+              '-c:v', COMPRESS.av1.codec,
+              '-preset', '10',          // faster preset for second pass
+              '-crf', aggressiveCrf,
+              '-pix_fmt', 'yuv420p',
+              '-svtav1-params', 'lp=1:tune=0',
+              '-threads', '2',
+              ...scale,
+              ...audio,
+              '-movflags', '+faststart',
+              '-sn',
+              aggressivePath,
+            ],
+            av1Timeout
+          );
+
+          if (fs.existsSync(aggressivePath) && fs.statSync(aggressivePath).size > 0) {
+            const aggressiveSize = fs.statSync(aggressivePath).size;
+            const aggressiveSavings = savingsPercent(originalSize, aggressiveSize);
+
+            // Keep the better of the two (prefer higher savings, or first pass if close)
+            if (aggressiveSavings > savings + 5) {
+              try { fs.unlinkSync(finalPath); } catch {}
+              finalPath = aggressivePath;
+              finalSize = aggressiveSize;
+              console.log(`[compress] second pass kept (savings=${aggressiveSavings.toFixed(1)}%)`);
+            } else {
+              try { fs.unlinkSync(aggressivePath); } catch {}
+              console.log('[compress] second pass discarded (not enough improvement)');
+            }
+          }
+        } catch (e: any) {
+          console.warn('[compress] aggressive second pass failed', e?.message?.slice?.(0, 200));
+          try { fs.unlinkSync(aggressivePath); } catch {}
+        }
+      }
     }
 
+    // ---------- VP9 fallback (unchanged) ----------
+    if (!finalPath) {
+      console.log('[compress] falling back to VP9');
+      const cpuUsed = mb >= HUGE_MB ? '8' : mb >= LARGE_MB ? '7' : '6';
+      const vp9Crf = mb >= HUGE_MB ? '32' : mb >= LARGE_MB ? '31' : '30'; // slightly relaxed
+
+      await run(
+        [
+          '-hide_banner', '-y',
+          '-i', inputPath,
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+          '-c:v', COMPRESS.vp9.codec,
+          '-crf', vp9Crf,
+          '-b:v', '0',
+          '-cpu-used', cpuUsed,
+          '-deadline', 'realtime',
+          '-row-mt', '1',
+          '-threads', '2',
+          '-pix_fmt', 'yuv420p',
+          ...scale,
+          ...audio,
+          '-sn',
+          vp9,
+        ],
+        vp9Timeout
+      );
+
+      if (!fs.existsSync(vp9) || fs.statSync(vp9).size === 0) {
+        throw new Error('Compression failed (empty output)');
+      }
+
+      finalPath = vp9;
+      finalCodec = COMPRESS.vp9.codec;
+      finalSize = fs.statSync(vp9).size;
+    }
+
+    const finalSavings = savingsPercent(originalSize, finalSize);
+
     return {
-      outputPath: vp9,
-      codec: COMPRESS.vp9.codec,
-      compressedSize: fs.statSync(vp9).size,
+      outputPath: finalPath,
+      codec: finalCodec,
+      compressedSize: finalSize,
+      savingsPercent: Math.round(finalSavings * 10) / 10,
     };
   },
 };
