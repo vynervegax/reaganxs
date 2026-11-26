@@ -64,6 +64,7 @@ export const videoWorker = new Worker<VideoJobData>(
       resumeFrom,
       compressedKey: dataCompressedKey,
       mediaKind: dataMediaKind,
+      forceVp9,
     } = job.data as any;
 
     const existing = await ProcessingJob.findById(jobId).lean();
@@ -231,6 +232,11 @@ export const videoWorker = new Worker<VideoJobData>(
         Boolean(persistedCompressedKey);
 
       if (canResumeRestore && persistedCompressedKey) {
+        const stillThere = await r2Service.exists(persistedCompressedKey);
+        if (!stillThere) {
+          throw new Error('Compressed checkpoint expired — full re-upload required');
+        }
+
         console.log(
           '[worker] resume from restore',
           jobId,
@@ -274,7 +280,10 @@ export const videoWorker = new Worker<VideoJobData>(
           progress: 15,
         });
 
-        const compressedResult = await compressionService.compress(filePath);
+        const compressedResult = await compressionService.compress(filePath, {
+          tier,
+          forceVp9: Boolean(forceVp9),
+        });
         compressedPath = compressedResult.outputPath;
         processedPath = compressedPath;
         codec = compressedResult.codec || '';
@@ -294,6 +303,7 @@ export const videoWorker = new Worker<VideoJobData>(
             compressedSize,
             codec,
             compressedKey: up.key,
+            forceVp9: Boolean(forceVp9),
           });
         } catch (e: any) {
           console.warn('[worker] compressed checkpoint upload', e?.message);
@@ -356,6 +366,7 @@ export const videoWorker = new Worker<VideoJobData>(
             {
               maxWidth: tier === 'demo' ? 960 : 1920,
               savingsPercent: savingsPercentForGate,
+              tier,
             }
           );
           temps.push(fullPath);

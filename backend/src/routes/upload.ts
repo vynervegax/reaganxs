@@ -57,6 +57,7 @@ router.post('/complete', optionalAuthenticate, async (req, res) => {
       deviceProfile,
       mimeType,
       mediaKind: bodyKind,
+      forceVp9: bodyForceVp9,
     } = req.body;
 
     if (!key || !originalFilename || !originalSize) {
@@ -79,6 +80,7 @@ router.post('/complete', optionalAuthenticate, async (req, res) => {
 
     const tier = (user?.tier as UserTier) || 'demo';
     const userId = user?.id || user?._id || null;
+    const forceVp9 = bodyForceVp9 === true || bodyForceVp9 === 'true';
 
     const mediaKind: MediaKind =
       (bodyKind as MediaKind) || resolveMediaKind(mimeType, originalFilename);
@@ -93,6 +95,7 @@ router.post('/complete', optionalAuthenticate, async (req, res) => {
       progress: 0,
       tier,
       r2Key: key,
+      forceVp9,
     });
 
     const localPath = path.join(
@@ -120,6 +123,7 @@ router.post('/complete', optionalAuthenticate, async (req, res) => {
         r2Key: key,
         mediaKind,
         mimeType,
+        forceVp9,
       },
       { removeOnComplete: 100, removeOnFail: 50 }
     );

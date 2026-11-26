@@ -32,6 +32,7 @@ export const processController = {
 
     const tier = ((user?.tier as UserTier) || 'demo') as UserTier;
     const userId = user?.id || user?._id || null;
+    const forceVp9 = req.body?.forceVp9 === 'true' || req.body?.forceVp9 === true;
 
     const mediaKind: MediaKind =
       ((req as any).mediaKind as MediaKind) ||
@@ -46,6 +47,7 @@ export const processController = {
       status: 'queued',
       progress: 0,
       tier,
+      forceVp9,
     });
 
     const bullJob = await videoQueue.add(
@@ -61,6 +63,7 @@ export const processController = {
         deviceProfile,
         mediaKind,
         mimeType: file.mimetype,
+        forceVp9,
       },
       { removeOnComplete: 100, removeOnFail: 50, priority: 5 }
     );
@@ -223,6 +226,7 @@ export const processController = {
         codec: job.codec ?? undefined,
         skipCompress: true,
         mediaKind,
+        forceVp9: Boolean((job as any).forceVp9),
       },
       { removeOnComplete: 100, removeOnFail: 50, priority }
     );

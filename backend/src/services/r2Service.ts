@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
@@ -117,7 +118,6 @@ async function uploadR2(
     return { url: `${publicBase}/${key}`, key };
   }
 
-  // Signed URL access window (object still needs app/cron delete)
   const hours =
     opts.expiryHours > 0
       ? Math.min(Math.max(opts.expiryHours, 1), 168)
@@ -177,6 +177,16 @@ async function cleanupPrefixOlderThan(
 }
 
 export const r2Service = {
+  async exists(key: string): Promise<boolean> {
+    if (!client || !key || key.startsWith('local/')) return false;
+    try {
+      await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   async uploadWithExpiry(
     localPath: string,
     expiryHours = 24
@@ -215,7 +225,6 @@ export const r2Service = {
     return uploadLocal(localPath);
   },
 
-  /** Partial frames → samples/ (9h cleanup) */
   async uploadSample(
     localPath: string
   ): Promise<{ url: string; key: string }> {
