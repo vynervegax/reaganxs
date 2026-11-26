@@ -56,6 +56,25 @@ function detectMediaKind(file: File): 'video' | 'image' {
   return 'video';
 }
 
+async function estimateUploadSpeed(): Promise<{ slow: boolean }> {
+  const conn = (navigator as any).connection;
+  if (conn) {
+    const effectiveType = conn.effectiveType as string | undefined;
+    const downlink = conn.downlink as number | undefined;
+    if (effectiveType && ['slow-2g', '2g', '3g'].includes(effectiveType)) {
+      return { slow: true };
+    }
+    if (downlink && downlink < 5) {
+      return { slow: true };
+    }
+  }
+  return { slow: false };
+}
+
+function slowConnectionMessage(): string {
+  return 'Your connection looks slow. We’re prioritising speed so your video finishes sooner. For better quality (AV1), try a faster network or Wi-Fi.';
+}
+
 export default function UploadZone({
   onUploadComplete,
   deviceProfile,
@@ -69,6 +88,7 @@ export default function UploadZone({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [speedNotice, setSpeedNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | XMLHttpRequest | null>(null);
   const cancelledRef = useRef(false);
 
@@ -125,6 +145,7 @@ export default function UploadZone({
     setProgress(0);
     setStatus('');
     setError(null);
+    setSpeedNotice(null);
     abortRef.current = null;
   }, [activeJobId, authHeaders, clearActiveJob]);
 
@@ -192,7 +213,7 @@ export default function UploadZone({
   );
 
   const uploadClassic = useCallback(
-    async (file: File) => {
+    async (file: File, forceVp9: boolean) => {
       setStatus('Uploading…');
       setProgress(5);
 
@@ -207,6 +228,8 @@ export default function UploadZone({
         form.append('deviceProfile', JSON.stringify(deviceProfile));
       }
       if (selectedModel) form.append('model', selectedModel);
+      if (forceVp9) form.append('forceVp9', 'true');
+      form.append('tier', tier);
 
       const res = await resilientFetch(`${API_BASE}/api/process`, {
         method: 'POST',
@@ -228,11 +251,11 @@ export default function UploadZone({
       setProgress(20);
       await pollUntilDone(String(data.jobId), file);
     },
-    [authHeaders, deviceProfile, selectedModel, pollUntilDone]
+    [authHeaders, deviceProfile, selectedModel, pollUntilDone, tier]
   );
 
   const uploadLargeViaR2 = useCallback(
-    async (file: File) => {
+    async (file: File, forceVp9: boolean) => {
       setStatus('Large file — preparing direct upload…');
       setProgress(3);
 
@@ -307,6 +330,8 @@ export default function UploadZone({
           skipCompress: false,
           model: selectedModel,
           deviceProfile,
+          forceVp9,
+          tier,
         }),
       });
       const completeData = await completeRes.json().catch(() => ({} as any));
@@ -320,21 +345,32 @@ export default function UploadZone({
       setProgress(65);
       await pollUntilDone(String(completeData.jobId), file);
     },
-    [authHeaders, deviceProfile, selectedModel, pollUntilDone]
+    [authHeaders, deviceProfile, selectedModel, pollUntilDone, tier]
   );
 
   const upload = useCallback(
     async (file: File) => {
       setError(null);
+      setSpeedNotice(null);
       setUploading(true);
       setProgress(1);
       cancelledRef.current = false;
 
       try {
+        // Demo always VP9. Free only when connection is slow.
+        let forceVp9 = tier === 'demo';
+        if (tier === 'free') {
+          const speed = await estimateUploadSpeed();
+          forceVp9 = speed.slow;
+          if (forceVp9) {
+            setSpeedNotice(slowConnectionMessage());
+          }
+        }
+
         if (file.size >= LARGE_UPLOAD_BYTES) {
-          await uploadLargeViaR2(file);
+          await uploadLargeViaR2(file, forceVp9);
         } else {
-          await uploadClassic(file);
+          await uploadClassic(file, forceVp9);
         }
       } catch (err: any) {
         if (
@@ -352,7 +388,7 @@ export default function UploadZone({
         abortRef.current = null;
       }
     },
-    [uploadClassic, uploadLargeViaR2]
+    [uploadClassic, uploadLargeViaR2, tier]
   );
 
   const onDrop = (e: React.DragEvent) => {
@@ -371,6 +407,12 @@ export default function UploadZone({
 
   return (
     <div className="space-y-4">
+      {speedNotice && (
+        <div className="text-sm text-amber-200 bg-amber-900/40 border border-amber-600/40 rounded-2xl p-4">
+          {speedNotice}
+        </div>
+      )}
+
       <div
         onDragOver={(e) => {
           e.preventDefault();

@@ -98,12 +98,11 @@ async function enhanceFramePng(
   dest: string,
   maxWidth: number
 ): Promise<void> {
-  // Slightly stronger non-AI chain so partial frames still look elevated
   const vfA = [
     `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-    'hqdn3d=1.6:1.6:3:3',
-    'eq=contrast=1.06:saturation=1.05',
-    'unsharp=5:5:1.15:5:5:0.55',
+    'hqdn3d=1.4:1.4:2.6:2.6',
+    'eq=contrast=1.04:saturation=1.03',
+    'unsharp=5:5:1.05:5:5:0.5',
   ].join(',');
 
   try {
@@ -115,8 +114,8 @@ async function enhanceFramePng(
 
   const vfB = [
     `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-    'hqdn3d=1.2:1.2:2.2:2.2',
-    'unsharp=5:5:0.9:5:5:0.45',
+    'hqdn3d=1.1:1.1:2:2',
+    'unsharp=5:5:0.85:5:5:0.4',
   ].join(',');
 
   await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
@@ -126,6 +125,7 @@ export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
   savingsPercent?: number;
+  tier?: string;
 };
 
 export type PartialFrameResult = {
@@ -208,16 +208,24 @@ export const restorationService = {
     }
 
     const maxWidth = opts.maxWidth ?? 1920;
+    const isDemo = opts.tier === 'demo';
+    const strong = !isDemo && (opts.savingsPercent ?? 0) > 40;
 
-    // Non-AI elevation: mild denoise + slight contrast/saturation + controlled sharpen
-    // Stronger when compression savings were high (more detail was removed)
-    const strong = (opts.savingsPercent ?? 0) > 40;
-    const vf = strong
+    // Demo: lightest elevate for speed
+    // Free: slightly stronger when compression removed more detail
+    const vf = isDemo
       ? [
           `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-          'hqdn3d=1.8:1.8:3:3',
-          'eq=contrast=1.06:saturation=1.05',
-          'unsharp=5:5:1.2:5:5:0.6',
+          'hqdn3d=1.2:1.2:2.2:2.2',
+          'eq=contrast=1.03:saturation=1.02',
+          'unsharp=5:5:0.9:5:5:0.45',
+        ].join(',')
+      : strong
+      ? [
+          `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+          'hqdn3d=1.6:1.6:3:3',
+          'eq=contrast=1.05:saturation=1.04',
+          'unsharp=5:5:1.15:5:5:0.55',
         ].join(',')
       : [
           `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
@@ -232,7 +240,7 @@ export const restorationService = {
   async restorePartialFrames(
     compressedPath: string,
     model: string,
-    opts: { frameCount?: number; maxWidth?: number; savingsPercent?: number } = {}
+    opts: { frameCount?: number; maxWidth?: number; savingsPercent?: number; tier?: string } = {}
   ): Promise<PartialFrameResult> {
     if (!fs.existsSync(compressedPath)) {
       throw new Error(`Partial restore input missing: ${compressedPath}`);

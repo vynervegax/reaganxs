@@ -15,6 +15,7 @@ export interface ProcessResult {
   isDemo?: boolean;
   tier?: string;
   message?: string;
+  jobId?: string;
 }
 
 export interface DeviceProfile {
@@ -113,25 +114,25 @@ export const api = {
     return data;
   },
 
-async getHistory(token: string) {
-  const res = await fetch(`${API_BASE}/api/history`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.message || 'Failed to load history');
-  }
-  return data;
-},
+  async getHistory(token: string) {
+    const res = await fetch(`${API_BASE}/api/history`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to load history');
+    }
+    return data;
+  },
 
-async getDemoHistory() {
-  const res = await fetch(`${API_BASE}/api/history/demo`);
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.message || 'Failed to load demo history');
-  }
-  return data;
-},
+  async getDemoHistory() {
+    const res = await fetch(`${API_BASE}/api/history/demo`);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to load demo history');
+    }
+    return data;
+  },
 
   // ---------- Process ----------
   async processVideo(
@@ -140,6 +141,8 @@ async getDemoHistory() {
       model?: string;
       deviceProfile?: DeviceProfile;
       token?: string | null;
+      forceVp9?: boolean;
+      tier?: string;
     } = {}
   ): Promise<ProcessResult> {
     const formData = new FormData();
@@ -151,6 +154,14 @@ async getDemoHistory() {
 
     if (options.deviceProfile) {
       formData.append('deviceProfile', JSON.stringify(options.deviceProfile));
+    }
+
+    if (options.forceVp9) {
+      formData.append('forceVp9', 'true');
+    }
+
+    if (options.tier) {
+      formData.append('tier', options.tier);
     }
 
     const headers: HeadersInit = {};

@@ -10,6 +10,13 @@ const VP9_TIMEOUT_LARGE_MS = 35 * 60 * 1000;
 
 const LARGE_MB = 800;
 
+export type CompressOptions = {
+  /** Force VP9 only (demo, or free-web when connection is slow) */
+  forceVp9?: boolean;
+  /** 'demo' | 'free' | 'premium' | 'desktop' */
+  tier?: string;
+};
+
 function inputMb(inputPath: string): number {
   try {
     return fs.statSync(inputPath).size / (1024 * 1024);
@@ -26,14 +33,11 @@ function vp9TimeoutFor(mb: number): number {
   return mb >= LARGE_MB ? VP9_TIMEOUT_LARGE_MS : VP9_TIMEOUT_MS;
 }
 
-/** Faster preset on larger files so we finish inside the stage budget */
 function av1PresetFor(mb: number): string {
   return mb >= LARGE_MB ? '10' : (COMPRESS.av1.preset ?? '8');
 }
 
-/** Slightly less aggressive CRF on large files (speed + fewer timeouts) */
 function av1CrfFor(mb: number): string {
-  // Prefer constants when present; otherwise fall back to a safe value
   const base = COMPRESS.av1.crf ?? '28';
   if (mb >= LARGE_MB) return String(Math.min(34, Number(base) + 2));
   return base;
@@ -73,12 +77,49 @@ function savingsPercent(original: number, compressed: number): number {
   return ((original - compressed) / original) * 100;
 }
 
+async function encodeVp9(
+  inputPath: string,
+  vp9: string,
+  audio: string[],
+  timeoutMs: number
+): Promise<number> {
+  await run(
+    [
+      '-hide_banner', '-y',
+      '-i', inputPath,
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      '-c:v', COMPRESS.vp9.codec,
+      '-crf', COMPRESS.vp9.crf ?? '28',
+      '-b:v', '0',
+      '-cpu-used', '8',
+      '-deadline', 'realtime',
+      '-row-mt', '1',
+      '-threads', '2',
+      '-pix_fmt', 'yuv420p',
+      ...audio,
+      '-sn',
+      vp9,
+    ],
+    timeoutMs
+  );
+
+  if (!fs.existsSync(vp9) || fs.statSync(vp9).size === 0) {
+    throw new Error('Compression failed (empty output)');
+  }
+  return fs.statSync(vp9).size;
+}
+
 export const compressionService = {
-  async compress(inputPath: string): Promise<{
+  async compress(
+    inputPath: string,
+    opts: CompressOptions = {}
+  ): Promise<{
     outputPath: string;
     codec: string;
     compressedSize: number;
     savingsPercent: number;
+    usedVp9BecauseSlow?: boolean;
   }> {
     const dir = path.dirname(inputPath);
     const stem = path.basename(inputPath, path.extname(inputPath));
@@ -92,8 +133,11 @@ export const compressionService = {
     const av1Preset = av1PresetFor(mb);
     const av1Crf = av1CrfFor(mb);
 
+    // Demo is always VP9-only. Free web can force VP9 when connection is slow.
+    const forceVp9 = !!opts.forceVp9 || opts.tier === 'demo';
+
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB av1Timeout=${Math.round(av1Timeout / 1000)}s preset=${av1Preset} crf=${av1Crf}`
+      `[compress] input=${mb.toFixed(1)}MB forceVp9=${forceVp9} tier=${opts.tier ?? '-'} preset=${av1Preset} crf=${av1Crf}`
     );
 
     const audio = [
@@ -103,7 +147,19 @@ export const compressionService = {
       '-ar', COMPRESS.audio.rate,
     ];
 
-    // Prefer a single fast AV1 pass (full resolution)
+    if (forceVp9) {
+      console.log('[compress] force VP9 (demo or slow free-web connection)');
+      const vp9Size = await encodeVp9(inputPath, vp9, audio, vp9Timeout);
+      return {
+        outputPath: vp9,
+        codec: COMPRESS.vp9.codec,
+        compressedSize: vp9Size,
+        savingsPercent: Math.round(savingsPercent(originalSize, vp9Size) * 10) / 10,
+        usedVp9BecauseSlow: !!opts.forceVp9 && opts.tier !== 'demo',
+      };
+    }
+
+    // Free / premium web: try AV1 first
     try {
       await run(
         [
@@ -129,8 +185,8 @@ export const compressionService = {
         const size = fs.statSync(av1).size;
         const savings = savingsPercent(originalSize, size);
 
-        // Only on smaller files: if savings are weak, do one short stronger pass
-        if (mb < LARGE_MB && savings < 50) {
+        // Short stronger second pass only on smaller free files when savings are weak
+        if (mb < LARGE_MB && savings < 50 && opts.tier === 'free') {
           const stronger = path.join(dir, `${stem}_av1_stronger.mp4`);
           try {
             await run(
@@ -150,7 +206,7 @@ export const compressionService = {
                 '-sn',
                 stronger,
               ],
-              Math.min(av1Timeout, 20 * 60 * 1000) // hard cap so we don't eat the stage budget
+              Math.min(av1Timeout, 20 * 60 * 1000)
             );
 
             if (fs.existsSync(stronger) && fs.statSync(stronger).size > 0) {
@@ -183,33 +239,8 @@ export const compressionService = {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
     }
 
-    // Fast VP9 fallback (still targets the same CRF range)
-    await run(
-      [
-        '-hide_banner', '-y',
-        '-i', inputPath,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', COMPRESS.vp9.codec,
-        '-crf', COMPRESS.vp9.crf ?? '28',
-        '-b:v', '0',
-        '-cpu-used', '8',
-        '-deadline', 'realtime',
-        '-row-mt', '1',
-        '-threads', '2',
-        '-pix_fmt', 'yuv420p',
-        ...audio,
-        '-sn',
-        vp9,
-      ],
-      vp9Timeout
-    );
-
-    if (!fs.existsSync(vp9) || fs.statSync(vp9).size === 0) {
-      throw new Error('Compression failed (empty output)');
-    }
-
-    const vp9Size = fs.statSync(vp9).size;
+    // VP9 fallback
+    const vp9Size = await encodeVp9(inputPath, vp9, audio, vp9Timeout);
     return {
       outputPath: vp9,
       codec: COMPRESS.vp9.codec,

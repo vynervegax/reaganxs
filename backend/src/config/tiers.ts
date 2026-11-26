@@ -1,4 +1,3 @@
-
 // backend/src/config/tiers.ts
 
 export type UserTier = 'demo' | 'free' | 'premium' | 'desktop';
@@ -21,6 +20,7 @@ export type TierOffering = {
   label: string;
   desktopAccess?: boolean;
   communityModels?: boolean;
+  forceVp9?: boolean; // always force VP9 for this tier
 };
 
 export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
@@ -33,6 +33,7 @@ export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
     label: 'Demo',
     desktopAccess: false,
     communityModels: false,
+    forceVp9: true, // demo is always VP9, speed-first
   },
   free: {
     models: ['atd-webphoto'],
@@ -43,6 +44,7 @@ export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
     label: 'Free',
     desktopAccess: false,
     communityModels: false,
+    forceVp9: false, // free can use AV1 unless client detects slow connection
   },
   premium: {
     models: ['rgt-webphoto', 'atd-webphoto'],
@@ -53,17 +55,19 @@ export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
     label: 'Premium',
     desktopAccess: true,
     communityModels: true,
+    forceVp9: false,
   },
   desktop: {
-  models: ['4x-bhi', 'rgt-s', 'atd-srx4'],
-  maxFileSizeMB: 100000,
-  dailyUploads: Infinity,
-  expiryHours: 0,
-  canUseVMAF: true,
-  label: 'Desktop',
-  desktopAccess: true,
-  communityModels: true,
-},
+    models: ['4x-bhi', 'rgt-s', 'atd-srx4'],
+    maxFileSizeMB: 100000,
+    dailyUploads: Infinity,
+    expiryHours: 0,
+    canUseVMAF: true,
+    label: 'Desktop',
+    desktopAccess: true,
+    communityModels: true,
+    forceVp9: false,
+  },
 };
 
 export function getModelsForTier(tier: UserTier): string[] {
@@ -84,4 +88,8 @@ export function hasDesktopAccess(tier: UserTier): boolean {
 
 export function hasCommunityModels(tier: UserTier): boolean {
   return Boolean(PROGRESSIVE_OFFERINGS[tier]?.communityModels);
+}
+
+export function shouldForceVp9(tier: UserTier, clientForce?: boolean): boolean {
+  return Boolean(PROGRESSIVE_OFFERINGS[tier]?.forceVp9) || Boolean(clientForce);
 }
