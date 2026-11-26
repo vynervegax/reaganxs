@@ -24,6 +24,7 @@ export type VideoJobData = {
   compressedKey?: string;
   mediaKind?: MediaKind;
   mimeType?: string;
+forceVp9?: boolean;
 };
 
 export const videoQueue = new Queue<VideoJobData>('video-process', {
