@@ -9,6 +9,7 @@ import {
 
 const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
+const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function run(args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -53,10 +54,6 @@ function fileSize(p: string): number {
   }
 }
 
-/**
- * Full-timeline restore encode.
- * On AV1 failure/timeout, throw so the caller can handle it (no partial-frames fallback).
- */
 async function encodeAv1OrVp9(
   inputPath: string,
   outPath: string,
@@ -65,50 +62,78 @@ async function encodeAv1OrVp9(
   const videoFilter = vf ? ['-vf', vf] : [];
   const av1 = outPath.replace(/(\.\w+)?$/, '_av1.mp4');
 
-  try {
-    await run(
-      [
-        '-i', inputPath,
-        ...videoFilter,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', 'libsvtav1',
-        '-preset', '8',
-        '-crf', '28',
-        '-pix_fmt', 'yuv420p',
-        '-svtav1-params', 'lp=1',
-        '-threads', '2',
-        '-c:a', 'libopus',
-        '-b:a', '96k',
-        '-ac', '2',
-        '-ar', '48000',
-        '-movflags', '+faststart',
-        '-sn',
-        av1,
-      ],
-      FULL_RESTORE_TIMEOUT_MS
-    );
+  await run(
+    [
+      '-i', inputPath,
+      ...videoFilter,
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      '-c:v', 'libsvtav1',
+      '-preset', '8',
+      '-crf', '28',
+      '-pix_fmt', 'yuv420p',
+      '-svtav1-params', 'lp=1',
+      '-threads', '2',
+      '-c:a', 'libopus',
+      '-b:a', '96k',
+      '-ac', '2',
+      '-ar', '48000',
+      '-movflags', '+faststart',
+      '-sn',
+      av1,
+    ],
+    FULL_RESTORE_TIMEOUT_MS
+  );
 
-    if (fileSize(av1) > 0) {
-      fs.renameSync(av1, outPath);
-      return 'libsvtav1';
-    }
-
-    throw new Error('Full restore AV1 produced empty output');
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    console.warn(
-      '[restore] full AV1 failed/timed out',
-      msg.slice?.(0, 200) || msg
-    );
-    throw e instanceof Error ? e : new Error(msg);
+  if (fileSize(av1) > 0) {
+    fs.renameSync(av1, outPath);
+    return 'libsvtav1';
   }
+
+  throw new Error('Full restore AV1 produced empty output');
+}
+
+async function enhanceFramePng(
+  src: string,
+  dest: string,
+  maxWidth: number
+): Promise<void> {
+  // Slightly stronger non-AI chain so partial frames still look elevated
+  const vfA = [
+    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+    'hqdn3d=1.6:1.6:3:3',
+    'eq=contrast=1.06:saturation=1.05',
+    'unsharp=5:5:1.15:5:5:0.55',
+  ].join(',');
+
+  try {
+    await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
+    if (fileSize(dest) > 0) return;
+  } catch {
+    /* fall through */
+  }
+
+  const vfB = [
+    `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+    'hqdn3d=1.2:1.2:2.2:2.2',
+    'unsharp=5:5:0.9:5:5:0.45',
+  ].join(',');
+
+  await run(['-i', src, '-vf', vfB, dest], FRAME_TIMEOUT_MS);
 }
 
 export type RestoreOptions = {
   maxWidth?: number;
   maxSeconds?: number;
-  savingsPercent?: number; // accepted for caller compatibility; unused in full-restore path
+  savingsPercent?: number;
+};
+
+export type PartialFrameResult = {
+  mode: 'partial-frames';
+  framePaths: string[];
+  frameCount: number;
+  workDir: string;
+  model: string;
 };
 
 export const restorationService = {
@@ -183,13 +208,168 @@ export const restorationService = {
     }
 
     const maxWidth = opts.maxWidth ?? 1920;
-    const vf = [
-      `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
-      'hqdn3d=1.2:1.2:2.5:2.5',
-      'eq=contrast=1.04:saturation=1.03',
-      'unsharp=5:5:0.9:5:5:0.45',
-    ].join(',');
+
+    // Non-AI elevation: mild denoise + slight contrast/saturation + controlled sharpen
+    // Stronger when compression savings were high (more detail was removed)
+    const strong = (opts.savingsPercent ?? 0) > 40;
+    const vf = strong
+      ? [
+          `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+          'hqdn3d=1.8:1.8:3:3',
+          'eq=contrast=1.06:saturation=1.05',
+          'unsharp=5:5:1.2:5:5:0.6',
+        ].join(',')
+      : [
+          `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+          'hqdn3d=1.3:1.3:2.5:2.5',
+          'eq=contrast=1.04:saturation=1.03',
+          'unsharp=5:5:0.95:5:5:0.5',
+        ].join(',');
 
     await encodeAv1OrVp9(source, outPath, vf);
+  },
+
+  async restorePartialFrames(
+    compressedPath: string,
+    model: string,
+    opts: { frameCount?: number; maxWidth?: number; savingsPercent?: number } = {}
+  ): Promise<PartialFrameResult> {
+    if (!fs.existsSync(compressedPath)) {
+      throw new Error(`Partial restore input missing: ${compressedPath}`);
+    }
+
+    const frameCount = opts.frameCount ?? 2;
+    const maxWidth = opts.maxWidth ?? 720;
+    const dir = path.dirname(compressedPath);
+    const stem = path.basename(compressedPath, path.extname(compressedPath));
+    const workDir = path.join(dir, `${stem}_partial_${Date.now()}`);
+    const framesIn = path.join(workDir, 'in');
+    const framesOut = path.join(workDir, 'out');
+    fs.mkdirSync(framesIn, { recursive: true });
+    fs.mkdirSync(framesOut, { recursive: true });
+
+    const patternIn = path.join(framesIn, 'frame_%03d.png');
+    await run(
+      [
+        '-i', compressedPath,
+        '-vf', `fps=1,scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+        '-frames:v', String(frameCount),
+        patternIn,
+      ],
+      PARTIAL_EXTRACT_TIMEOUT_MS
+    );
+
+    const inputs = fs
+      .readdirSync(framesIn)
+      .filter((f) => f.endsWith('.png'))
+      .sort()
+      .map((f) => path.join(framesIn, f));
+
+    if (inputs.length === 0) {
+      throw new Error('No frames extracted for partial restore');
+    }
+
+    const framePaths: string[] = [];
+
+    for (let i = 0; i < inputs.length; i++) {
+      const src = inputs[i];
+      const dest = path.join(
+        framesOut,
+        `restored_${String(i).padStart(3, '0')}.png`
+      );
+
+      try {
+        await enhanceFramePng(src, dest, maxWidth);
+      } catch {
+        try {
+          fs.copyFileSync(src, dest);
+        } catch {
+          continue;
+        }
+      }
+
+      if (fs.existsSync(dest) && fileSize(dest) > 0) {
+        framePaths.push(dest);
+      }
+    }
+
+    if (framePaths.length === 0) {
+      throw new Error('Partial restore produced no frames');
+    }
+
+    return {
+      mode: 'partial-frames',
+      framePaths,
+      frameCount: framePaths.length,
+      workDir,
+      model,
+    };
+  },
+
+  async framesToPreviewClip(
+    framePaths: string[],
+    outPath: string,
+    fps = 2
+  ): Promise<string> {
+    if (framePaths.length === 0) {
+      throw new Error('No frames for preview clip');
+    }
+
+    const listFile = path.join(
+      path.dirname(outPath),
+      `concat_${Date.now()}.txt`
+    );
+    const body = framePaths
+      .map((p) => `file '${p.replace(/'/g, `'\\''`)}'`)
+      .join('\n');
+    fs.writeFileSync(listFile, body);
+
+    const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
+
+    try {
+      await run(
+        [
+          '-f', 'concat', '-safe', '0',
+          '-r', String(fps),
+          '-i', listFile,
+          '-c:v', 'libsvtav1',
+          '-preset', '10',
+          '-crf', '28',
+          '-svtav1-params', 'lp=1',
+          '-threads', '2',
+          '-an',
+          raw,
+        ],
+        PARTIAL_EXTRACT_TIMEOUT_MS
+      );
+    } catch {
+      await run(
+        [
+          '-f', 'concat', '-safe', '0',
+          '-r', String(fps),
+          '-i', listFile,
+          '-c:v', 'libvpx-vp9',
+          '-crf', '28',
+          '-b:v', '0',
+          '-cpu-used', '5',
+          '-an',
+          raw,
+        ],
+        PARTIAL_EXTRACT_TIMEOUT_MS
+      );
+    }
+
+    if (fileSize(raw) === 0) {
+      throw new Error('Preview clip empty');
+    }
+    fs.renameSync(raw, outPath);
+
+    try {
+      fs.unlinkSync(listFile);
+    } catch {
+      /* ignore */
+    }
+
+    return outPath;
   },
 };
