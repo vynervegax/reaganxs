@@ -3,17 +3,16 @@ import fs from 'fs';
 import path from 'path';
 import { COMPRESS } from '../config/constants';
 
-const AV1_TIMEOUT_MS = 20 * 60 * 1000;           // < 500 MB
-const AV1_TIMEOUT_LARGE_MS = 30 * 60 * 1000;     // 500–1000 MB
-const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // ≥ 1000 MB
+const AV1_TIMEOUT_MS = 35 * 60 * 1000;        // < 800 MB
+const AV1_TIMEOUT_LARGE_MS = 50 * 60 * 1000;  // 800–1500 MB
+const AV1_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // ≥ 1500 MB
 
-const VP9_TIMEOUT_MS = 8 * 60 * 1000;
-const VP9_TIMEOUT_LARGE_MS = 12 * 60 * 1000;
-const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;      // was 18 min — raised for 1.5 GB+ sources
+const VP9_TIMEOUT_MS = 15 * 60 * 1000;
+const VP9_TIMEOUT_LARGE_MS = 25 * 60 * 1000;
+const VP9_TIMEOUT_HUGE_MS = 40 * 60 * 1000;   // longer for huge
 
-const SKIP_AV1_MB = 500;   // ≥500 MB → skip AV1, go straight to fast VP9
-const LARGE_MB = 500;
-const HUGE_MB = 1000;
+const LARGE_MB = 800;
+const HUGE_MB = 1500;
 
 function inputMb(inputPath: string): number {
   try {
@@ -43,17 +42,18 @@ function vp9TimeoutFor(mb: number): number {
   return VP9_TIMEOUT_MS;
 }
 
-/** Faster presets + slightly higher CRF for web speed/size */
 function av1PresetFor(mb: number): string {
-  if (mb >= HUGE_MB) return '13';
-  if (mb >= LARGE_MB) return '12';
-  return '10';
+  if (mb >= HUGE_MB) return '12';
+  if (mb >= LARGE_MB) return '10';
+  return '8';
 }
 
-function av1CrfFor(mb: number): string {
-  if (mb >= HUGE_MB) return '34';
-  if (mb >= LARGE_MB) return '33';
-  return '32';
+/** Light downscale only on huge files so encoding can finish. */
+function scaleArgs(mb: number): string[] {
+  if (mb >= HUGE_MB) {
+    return ['-vf', 'scale=min(1280\\,iw):-2'];
+  }
+  return [];
 }
 
 function run(args: string[], timeoutMs: number): Promise<void> {
@@ -85,6 +85,43 @@ function run(args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
+function probeAudioCodec(inputPath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const p = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      inputPath,
+    ]);
+    let out = '';
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL');
+      resolve(null);
+    }, 10_000);
+    p.stdout.on('data', (d) => (out += d.toString()));
+    p.on('close', () => {
+      clearTimeout(timer);
+      resolve(out.trim() || null);
+    });
+    p.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+async function audioArgs(inputPath: string): Promise<string[]> {
+  const codec = await probeAudioCodec(inputPath);
+  if (codec === 'opus') return ['-c:a', 'copy'];
+  return [
+    '-c:a', COMPRESS.audio.codec,
+    '-b:a', COMPRESS.audio.bitrate,
+    '-ac', COMPRESS.audio.channels,
+    '-ar', COMPRESS.audio.rate,
+  ];
+}
+
 export const compressionService = {
   async compress(inputPath: string): Promise<{
     outputPath: string;
@@ -97,32 +134,18 @@ export const compressionService = {
     const vp9 = path.join(dir, `${stem}_vp9.webm`);
 
     const mb = inputMb(inputPath);
+    const cls = sizeClass(mb);
     const av1Timeout = av1TimeoutFor(mb);
     const vp9Timeout = vp9TimeoutFor(mb);
     const av1Preset = av1PresetFor(mb);
-    const av1Crf = av1CrfFor(mb);
-    const skipAv1 = mb >= SKIP_AV1_MB;
+    const audio = await audioArgs(inputPath);
+    const scale = scaleArgs(mb);
+
+    const skipAv1 = cls === 'huge';
 
     console.log(
-      `[compress] input=${mb.toFixed(1)}MB class=${sizeClass(mb)} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s preset=${av1Preset} crf=${av1Crf}`
+      `[compress] input=${mb.toFixed(1)}MB class=${cls} skipAv1=${skipAv1} av1Timeout=${Math.round(av1Timeout / 1000)}s vp9Timeout=${Math.round(vp9Timeout / 1000)}s preset=${av1Preset} scale=${scale.length > 0}`
     );
-
-    const audio = [
-      '-c:a', COMPRESS.audio.codec,
-      '-b:a', COMPRESS.audio.bitrate,
-      '-ac', COMPRESS.audio.channels,
-      '-ar', COMPRESS.audio.rate,
-    ];
-
-    // More aggressive scale on large/huge inputs for speed
-    const scale =
-      mb >= 1500
-        ? ['-vf', 'scale=min(1280\\,iw):-2']
-        : mb >= HUGE_MB
-          ? ['-vf', 'scale=min(1600\\,iw):-2']
-          : mb >= LARGE_MB
-            ? ['-vf', 'scale=min(1920\\,iw):-2']
-            : [];
 
     if (!skipAv1) {
       try {
@@ -134,7 +157,7 @@ export const compressionService = {
             '-map', '0:a:0?',
             '-c:v', COMPRESS.av1.codec,
             '-preset', av1Preset,
-            '-crf', av1Crf,
+            '-crf', COMPRESS.av1.crf,
             '-pix_fmt', 'yuv420p',
             '-svtav1-params', 'lp=1:tune=0',
             '-threads', '2',
@@ -157,13 +180,10 @@ export const compressionService = {
       } catch (e: any) {
         console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
       }
-    } else {
-      console.log('[compress] skip AV1 (large file) → VP9');
     }
 
-    // Fast VP9 fallback (or primary for large files)
-    const cpuUsed = mb >= HUGE_MB ? '8' : mb >= LARGE_MB ? '7' : '6';
-    const vp9Crf = mb >= HUGE_MB ? '34' : mb >= LARGE_MB ? '33' : '32';
+    const cpuUsed = cls === 'huge' ? '8' : cls === 'large' ? '7' : '6';
+    const deadline = cls === 'huge' ? 'realtime' : 'good';
 
     await run(
       [
@@ -172,10 +192,10 @@ export const compressionService = {
         '-map', '0:v:0',
         '-map', '0:a:0?',
         '-c:v', COMPRESS.vp9.codec,
-        '-crf', vp9Crf,
+        '-crf', COMPRESS.vp9.crf,
         '-b:v', '0',
         '-cpu-used', cpuUsed,
-        '-deadline', 'realtime',
+        '-deadline', deadline,
         '-row-mt', '1',
         '-threads', '2',
         '-pix_fmt', 'yuv420p',
