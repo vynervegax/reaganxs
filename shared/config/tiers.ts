@@ -1,95 +1,114 @@
 //shared
 
+// backend/src/config/tiers.ts
+
 export type UserTier = 'demo' | 'free' | 'premium' | 'desktop';
 
-export type ModelId = string;
+/** Only these three restoration models remain. */
+export type RestorationModel =
+  | 'none'
+  | 'bhi'
+  | 'real-web-photo-rgt-s'
+  | 'dat2';
 
-export const TIER_ORDER: Record<UserTier, number> = {
-  demo: 0,
-  free: 1,
-  premium: 2,
-  desktop: 3,
-};
-
-export type TierOffering = {
-  models: string[];
-  maxFileSizeMB: number;
-  dailyUploads: number;
-  expiryHours: number;
-  canUseVMAF: boolean;
+export interface TierOffering {
   label: string;
-  desktopAccess?: boolean;
-  communityModels?: boolean;
-  forceVp9?: boolean; // always force VP9 for this tier
-};
+  codecs: Array<'vp9' | 'av1'>;
+  models: RestorationModel[];
+  defaultModel: RestorationModel | null;
+  vp9OnSlowOrWeak: boolean;
+  maxWidth: number;
+  /** Completed result + savings card lifetime (hours). 0 = keep until managed. */
+  expiryHours: number;
+  /** Intermediate stages (upload, compressed, samples) lifetime. */
+  stageExpiryHours: number;
+  maxFileSizeMB: number;
+  canUseVMAF: boolean;
+  enforceSizeGate: true;
+}
 
 export const PROGRESSIVE_OFFERINGS: Record<UserTier, TierOffering> = {
   demo: {
-    models: ['rgt-webphoto'],
-    maxFileSizeMB: 500,
-    dailyUploads: 5,
-    expiryHours: 24,
-    canUseVMAF: false,
     label: 'Demo',
-    desktopAccess: false,
-    communityModels: false,
-    forceVp9: true, // demo is always VP9, speed-first
+    codecs: ['vp9'],
+    models: [],
+    defaultModel: null,
+    vp9OnSlowOrWeak: true,
+    maxWidth: 960,
+    expiryHours: 24,
+    stageExpiryHours: 9,
+    maxFileSizeMB: 100,
+    canUseVMAF: false,
+    enforceSizeGate: true,
   },
   free: {
-    models: ['atd-webphoto'],
-    maxFileSizeMB: 5000,
-    dailyUploads: 20,
-    expiryHours: 72,
-    canUseVMAF: false,
     label: 'Free',
-    desktopAccess: false,
-    communityModels: false,
-    forceVp9: false, // free can use AV1 unless client detects slow connection
+    codecs: ['av1', 'vp9'],
+    models: ['real-web-photo-rgt-s'],
+    defaultModel: 'real-web-photo-rgt-s',
+    vp9OnSlowOrWeak: true,
+    maxWidth: 1280,
+    expiryHours: 72,
+    stageExpiryHours: 9,
+    maxFileSizeMB: 500,
+    canUseVMAF: false,
+    enforceSizeGate: true,
   },
   premium: {
-    models: ['rgt-webphoto', 'atd-webphoto'],
-    maxFileSizeMB: 30000,
-    dailyUploads: 100,
-    expiryHours: 168,
-    canUseVMAF: true,
     label: 'Premium',
-    desktopAccess: true,
-    communityModels: true,
-    forceVp9: false,
+    codecs: ['av1', 'vp9'],
+    models: ['bhi', 'real-web-photo-rgt-s'],
+    defaultModel: 'bhi',
+    vp9OnSlowOrWeak: true,
+    maxWidth: 1920,
+    expiryHours: 168,
+    stageExpiryHours: 9,
+    maxFileSizeMB: 2000,
+    canUseVMAF: true,
+    enforceSizeGate: true,
   },
   desktop: {
-    models: ['4x-bhi', 'rgt-s', 'atd-srx4'],
-    maxFileSizeMB: 100000,
-    dailyUploads: Infinity,
-    expiryHours: 0,
-    canUseVMAF: true,
     label: 'Desktop',
-    desktopAccess: true,
-    communityModels: true,
-    forceVp9: false,
+    codecs: ['av1', 'vp9'],
+    models: ['bhi', 'real-web-photo-rgt-s', 'dat2'],
+    defaultModel: 'dat2',
+    vp9OnSlowOrWeak: true,
+    maxWidth: 3840,
+    expiryHours: 0,
+    stageExpiryHours: 9,
+    maxFileSizeMB: 8000,
+    canUseVMAF: true,
+    enforceSizeGate: true,
   },
 };
 
-export function getModelsForTier(tier: UserTier): string[] {
-  return PROGRESSIVE_OFFERINGS[tier]?.models ?? PROGRESSIVE_OFFERINGS.demo.models;
+export function codecForTier(
+  tier: UserTier,
+  opts: { forceVp9?: boolean; slowOrWeak?: boolean }
+): 'vp9' | 'av1' {
+  const o = PROGRESSIVE_OFFERINGS[tier];
+  if (!o.codecs.includes('av1')) return 'vp9';
+  if (opts.forceVp9 || (o.vp9OnSlowOrWeak && opts.slowOrWeak)) return 'vp9';
+  return 'av1';
 }
 
-export function getDefaultModel(tier: UserTier): string {
-  return getModelsForTier(tier)[0] || 'rgt-webphoto';
+export function modelAllowed(
+  tier: UserTier,
+  model: string | null | undefined
+): boolean {
+  if (!model || model === 'none') return true;
+  return PROGRESSIVE_OFFERINGS[tier].models.includes(model as RestorationModel);
 }
 
-export function canAccessModel(tier: UserTier, modelId: string): boolean {
-  return getModelsForTier(tier).includes(modelId);
+/** Alias used by routingService. */
+export function canAccessModel(tier: UserTier, model: string | null | undefined): boolean {
+  return modelAllowed(tier, model);
+}
+
+export function getDefaultModel(tier: UserTier): RestorationModel | null {
+  return PROGRESSIVE_OFFERINGS[tier]?.defaultModel ?? null;
 }
 
 export function hasDesktopAccess(tier: UserTier): boolean {
-  return Boolean(PROGRESSIVE_OFFERINGS[tier]?.desktopAccess);
-}
-
-export function hasCommunityModels(tier: UserTier): boolean {
-  return Boolean(PROGRESSIVE_OFFERINGS[tier]?.communityModels);
-}
-
-export function shouldForceVp9(tier: UserTier, clientForce?: boolean): boolean {
-  return Boolean(PROGRESSIVE_OFFERINGS[tier]?.forceVp9) || Boolean(clientForce);
+  return tier === 'desktop';
 }
