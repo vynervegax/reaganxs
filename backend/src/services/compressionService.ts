@@ -110,6 +110,33 @@ async function encodeVp9(
   return fs.statSync(vp9).size;
 }
 
+/** Never return a larger file than the original. */
+function preferSmaller(
+  originalSize: number,
+  candidatePath: string,
+  candidateSize: number,
+  originalPath: string,
+  codec: string
+): { outputPath: string; codec: string; compressedSize: number; savingsPercent: number } {
+  if (candidateSize > 0 && candidateSize < originalSize) {
+    return {
+      outputPath: candidatePath,
+      codec,
+      compressedSize: candidateSize,
+      savingsPercent: Math.round(savingsPercent(originalSize, candidateSize) * 10) / 10,
+    };
+  }
+  // Candidate is not smaller — return original
+  try { if (candidatePath !== originalPath && fs.existsSync(candidatePath)) fs.unlinkSync(candidatePath); } catch {}
+  console.warn(`[compress] candidate ${candidateSize} >= original ${originalSize} — returning original`);
+  return {
+    outputPath: originalPath,
+    codec: 'original',
+    compressedSize: originalSize,
+    savingsPercent: 0,
+  };
+}
+
 export const compressionService = {
   async compress(
     inputPath: string,
@@ -150,16 +177,14 @@ export const compressionService = {
     if (forceVp9) {
       console.log('[compress] force VP9 (demo or slow free-web connection)');
       const vp9Size = await encodeVp9(inputPath, vp9, audio, vp9Timeout);
+      const chosen = preferSmaller(originalSize, vp9, vp9Size, inputPath, COMPRESS.vp9.codec);
       return {
-        outputPath: vp9,
-        codec: COMPRESS.vp9.codec,
-        compressedSize: vp9Size,
-        savingsPercent: Math.round(savingsPercent(originalSize, vp9Size) * 10) / 10,
+        ...chosen,
         usedVp9BecauseSlow: !!opts.forceVp9 && opts.tier !== 'demo',
       };
     }
 
-    // Free / premium web: try AV1 first
+    // Free / premium / desktop: try AV1 first
     try {
       await run(
         [
@@ -212,7 +237,7 @@ export const compressionService = {
             if (fs.existsSync(stronger) && fs.statSync(stronger).size > 0) {
               const sSize = fs.statSync(stronger).size;
               const sSavings = savingsPercent(originalSize, sSize);
-              if (sSavings > savings + 5) {
+              if (sSavings > savings + 5 && sSize < originalSize) {
                 try { fs.unlinkSync(av1); } catch {}
                 return {
                   outputPath: stronger,
@@ -228,12 +253,7 @@ export const compressionService = {
           }
         }
 
-        return {
-          outputPath: av1,
-          codec: COMPRESS.av1.codec,
-          compressedSize: size,
-          savingsPercent: Math.round(savings * 10) / 10,
-        };
+        return preferSmaller(originalSize, av1, size, inputPath, COMPRESS.av1.codec);
       }
     } catch (e: any) {
       console.warn('[compress] AV1 → VP9', e?.message?.slice?.(0, 200));
@@ -241,11 +261,6 @@ export const compressionService = {
 
     // VP9 fallback
     const vp9Size = await encodeVp9(inputPath, vp9, audio, vp9Timeout);
-    return {
-      outputPath: vp9,
-      codec: COMPRESS.vp9.codec,
-      compressedSize: vp9Size,
-      savingsPercent: Math.round(savingsPercent(originalSize, vp9Size) * 10) / 10,
-    };
+    return preferSmaller(originalSize, vp9, vp9Size, inputPath, COMPRESS.vp9.codec);
   },
 };

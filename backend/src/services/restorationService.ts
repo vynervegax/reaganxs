@@ -7,7 +7,7 @@ import {
   MODEL_DISPLAY,
 } from '../config/constants';
 
-const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+const FULL_RESTORE_TIMEOUT_MS = 10 * 60 * 1000;
 const FRAME_TIMEOUT_MS = 3 * 60 * 1000;
 const PARTIAL_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -21,11 +21,7 @@ function run(args: string[], timeoutMs: number): Promise<void> {
     let err = '';
     const timer = setTimeout(() => {
       p.kill('SIGKILL');
-      reject(
-        new Error(
-          `FFmpeg restore timed out after ${Math.round(timeoutMs / 1000)}s`
-        )
-      );
+      reject(new Error(`FFmpeg restore timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
 
     p.stderr.on('data', (d) => (err += d.toString()));
@@ -33,9 +29,7 @@ function run(args: string[], timeoutMs: number): Promise<void> {
     p.on('close', (code, signal) => {
       clearTimeout(timer);
       if (code === 0) return resolve();
-      if (signal === 'SIGKILL') {
-        return reject(new Error('FFmpeg restore killed (OOM or timeout)'));
-      }
+      if (signal === 'SIGKILL') return reject(new Error('FFmpeg restore killed (OOM or timeout)'));
       reject(new Error(err.slice(-2500) || `FFmpeg exited ${code}`));
     });
 
@@ -47,11 +41,7 @@ function run(args: string[], timeoutMs: number): Promise<void> {
 }
 
 function fileSize(p: string): number {
-  try {
-    return fs.statSync(p).size;
-  } catch {
-    return 0;
-  }
+  try { return fs.statSync(p).size; } catch { return 0; }
 }
 
 async function encodeAv1OrVp9(
@@ -89,15 +79,10 @@ async function encodeAv1OrVp9(
     fs.renameSync(av1, outPath);
     return 'libsvtav1';
   }
-
   throw new Error('Full restore AV1 produced empty output');
 }
 
-async function enhanceFramePng(
-  src: string,
-  dest: string,
-  maxWidth: number
-): Promise<void> {
+async function enhanceFramePng(src: string, dest: string, maxWidth: number): Promise<void> {
   const vfA = [
     `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
     'hqdn3d=1.4:1.4:2.6:2.6',
@@ -108,9 +93,7 @@ async function enhanceFramePng(
   try {
     await run(['-i', src, '-vf', vfA, dest], FRAME_TIMEOUT_MS);
     if (fileSize(dest) > 0) return;
-  } catch {
-    /* fall through */
-  }
+  } catch { /* fall through */ }
 
   const vfB = [
     `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
@@ -138,10 +121,7 @@ export type PartialFrameResult = {
 
 export const restorationService = {
   weightPath(modelId: string) {
-    return path.join(
-      MODELS_DIR,
-      MODEL_FILES[modelId] || MODEL_FILES['atd-webphoto']
-    );
+    return path.join(MODELS_DIR, MODEL_FILES[modelId] || MODEL_FILES['real-web-photo-rgt-s'] || '');
   },
 
   displayName(modelId: string) {
@@ -159,10 +139,7 @@ export const restorationService = {
 
     const dir = path.dirname(inputPath);
     const stem = path.basename(inputPath, path.extname(inputPath));
-    const outPath = path.join(
-      dir,
-      `${stem}_restored_${model.replace(/[^\w.-]+/g, '_')}.mp4`
-    );
+    const outPath = path.join(dir, `${stem}_restored_${model.replace(/[^\w.-]+/g, '_')}.mp4`);
 
     try {
       await this.runModelWorker(inputPath, outPath, model, opts);
@@ -200,10 +177,7 @@ export const restorationService = {
 
     if (opts.maxSeconds && opts.maxSeconds > 0) {
       const slice = path.join(workDir, `slice_${Date.now()}.mp4`);
-      await run(
-        ['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice],
-        FRAME_TIMEOUT_MS
-      );
+      await run(['-t', String(opts.maxSeconds), '-i', inputPath, '-c', 'copy', slice], FRAME_TIMEOUT_MS);
       source = slice;
     }
 
@@ -211,8 +185,6 @@ export const restorationService = {
     const isDemo = opts.tier === 'demo';
     const strong = !isDemo && (opts.savingsPercent ?? 0) > 40;
 
-    // Demo: lightest elevate for speed
-    // Free: slightly stronger when compression removed more detail
     const vf = isDemo
       ? [
           `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
@@ -273,63 +245,30 @@ export const restorationService = {
       .sort()
       .map((f) => path.join(framesIn, f));
 
-    if (inputs.length === 0) {
-      throw new Error('No frames extracted for partial restore');
-    }
+    if (inputs.length === 0) throw new Error('No frames extracted for partial restore');
 
     const framePaths: string[] = [];
-
     for (let i = 0; i < inputs.length; i++) {
       const src = inputs[i];
-      const dest = path.join(
-        framesOut,
-        `restored_${String(i).padStart(3, '0')}.png`
-      );
-
+      const dest = path.join(framesOut, `restored_${String(i).padStart(3, '0')}.png`);
       try {
         await enhanceFramePng(src, dest, maxWidth);
       } catch {
-        try {
-          fs.copyFileSync(src, dest);
-        } catch {
-          continue;
-        }
+        try { fs.copyFileSync(src, dest); } catch { continue; }
       }
-
-      if (fs.existsSync(dest) && fileSize(dest) > 0) {
-        framePaths.push(dest);
-      }
+      if (fs.existsSync(dest) && fileSize(dest) > 0) framePaths.push(dest);
     }
 
-    if (framePaths.length === 0) {
-      throw new Error('Partial restore produced no frames');
-    }
+    if (framePaths.length === 0) throw new Error('Partial restore produced no frames');
 
-    return {
-      mode: 'partial-frames',
-      framePaths,
-      frameCount: framePaths.length,
-      workDir,
-      model,
-    };
+    return { mode: 'partial-frames', framePaths, frameCount: framePaths.length, workDir, model };
   },
 
-  async framesToPreviewClip(
-    framePaths: string[],
-    outPath: string,
-    fps = 2
-  ): Promise<string> {
-    if (framePaths.length === 0) {
-      throw new Error('No frames for preview clip');
-    }
+  async framesToPreviewClip(framePaths: string[], outPath: string, fps = 2): Promise<string> {
+    if (framePaths.length === 0) throw new Error('No frames for preview clip');
 
-    const listFile = path.join(
-      path.dirname(outPath),
-      `concat_${Date.now()}.txt`
-    );
-    const body = framePaths
-      .map((p) => `file '${p.replace(/'/g, `'\\''`)}'`)
-      .join('\n');
+    const listFile = path.join(path.dirname(outPath), `concat_${Date.now()}.txt`);
+    const body = framePaths.map((p) => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n');
     fs.writeFileSync(listFile, body);
 
     const raw = outPath.replace(/(\.\w+)?$/, '_raw.mp4');
@@ -367,17 +306,9 @@ export const restorationService = {
       );
     }
 
-    if (fileSize(raw) === 0) {
-      throw new Error('Preview clip empty');
-    }
+    if (fileSize(raw) === 0) throw new Error('Preview clip empty');
     fs.renameSync(raw, outPath);
-
-    try {
-      fs.unlinkSync(listFile);
-    } catch {
-      /* ignore */
-    }
-
+    try { fs.unlinkSync(listFile); } catch { /* ignore */ }
     return outPath;
   },
 };

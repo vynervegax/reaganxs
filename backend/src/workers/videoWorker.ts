@@ -8,37 +8,34 @@ import { restorationService } from '../services/restorationService';
 import { imageCompressionService } from '../services/imageCompressionService';
 import { imageRestorationService } from '../services/imageRestorationService';
 import { routingService } from '../services/routingService';
-import { r2Service, SHORT_LIVED_HOURS } from '../services/r2Service';
+import { r2Service } from '../services/r2Service';
 import { savingsService } from '../services/savingsService';
 import { qualityMetricsService } from '../services/qualityMetricsService';
-import {
-  COMPRESSION_ONLY,
-  UPLOAD_TEMP_DIR,
-} from '../config/constants';
+import { COMPRESSION_ONLY, UPLOAD_TEMP_DIR } from '../config/constants';
 import { MEDIA_KINDS } from '../config/mediaKinds';
-import { PROGRESSIVE_OFFERINGS, type UserTier } from '../config/tiers';
+import {
+  PROGRESSIVE_OFFERINGS,
+  modelAllowed,
+  type UserTier,
+} from '../config/tiers';
 import type { VideoJobData } from '../queue/videoQueue';
 
 const connection = new IORedis(process.env.REDIS_URL || 'redis://127.0.0.1:6379', {
   maxRetriesPerRequest: null,
 });
 
+/** Intermediate stages (upload, compressed, samples) — 9 hours. */
+const STAGE_EXPIRY_HOURS = 9;
+
 function sizeOf(p: string): number {
-  try {
-    return fs.statSync(p).size;
-  } catch {
-    return 0;
-  }
+  try { return fs.statSync(p).size; } catch { return 0; }
 }
 
 function safeUnlink(p?: string) {
-  try {
-    if (p && fs.existsSync(p)) fs.unlinkSync(p);
-  } catch {
-    /* ignore */
-  }
+  try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch { /* ignore */ }
 }
 
+/** Completed result + savings card: demo 24, free 72, premium 168, desktop 0 (keep). */
 function expiryHoursForTier(tier: UserTier): number {
   const h = PROGRESSIVE_OFFERINGS[tier]?.expiryHours;
   if (h === 0) return 0;
@@ -70,13 +67,7 @@ export const videoWorker = new Worker<VideoJobData>(
     const existing = await ProcessingJob.findById(jobId).lean();
     if (!existing || existing.status === 'cancelled') {
       console.log('[worker] skip cancelled job', jobId);
-      if (r2Key) {
-        try {
-          await r2Service.deleteObject(r2Key);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (r2Key) { try { await r2Service.deleteObject(r2Key); } catch {} }
       return;
     }
 
@@ -84,13 +75,9 @@ export const videoWorker = new Worker<VideoJobData>(
     const offering = PROGRESSIVE_OFFERINGS[tier] || PROGRESSIVE_OFFERINGS.demo;
     const tierExpiryHours = expiryHoursForTier(tier);
 
-    const mediaKind =
-      dataMediaKind || (existing as any).mediaKind || 'video';
-
+    const mediaKind = dataMediaKind || (existing as any).mediaKind || 'video';
     const kindCfg = MEDIA_KINDS[mediaKind as keyof typeof MEDIA_KINDS];
-    if (kindCfg && !kindCfg.enabled) {
-      throw new Error(`Media kind "${mediaKind}" is not enabled`);
-    }
+    if (kindCfg && !kindCfg.enabled) throw new Error(`Media kind "${mediaKind}" is not enabled`);
 
     let originalPath = filePath || '';
     let processedPath = '';
@@ -111,14 +98,9 @@ export const videoWorker = new Worker<VideoJobData>(
     try {
       // ========== IMAGE PATH ==========
       if (kindCfg?.processor === 'image') {
-        if (!filePath || !fs.existsSync(filePath)) {
-          throw new Error('Missing input file for image compress');
-        }
+        if (!filePath || !fs.existsSync(filePath)) throw new Error('Missing input file for image compress');
 
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'compressing',
-          progress: 15,
-        });
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'compressing', progress: 15 });
 
         const compressed = await imageCompressionService.compress(filePath, {
           maxWidth: tier === 'demo' ? 1600 : 2560,
@@ -127,12 +109,7 @@ export const videoWorker = new Worker<VideoJobData>(
         processedPath = compressed.outputPath;
         codec = compressed.codec || 'avif';
 
-        const user = userId
-          ? { id: userId, tier, preferredModel }
-          : preferredModel
-            ? { preferredModel }
-            : null;
-
+        const user = userId ? { id: userId, tier, preferredModel } : preferredModel ? { preferredModel } : null;
         const decision = await routingService.decide(
           { originalSize, size: compressed.compressedSize },
           deviceProfile,
@@ -141,12 +118,13 @@ export const videoWorker = new Worker<VideoJobData>(
 
         let modelUsed: string = COMPRESSION_ONLY;
 
-        if (decision.model && compressed.compressedSize < originalSize * 0.98) {
+        if (
+          decision.model &&
+          modelAllowed(tier, decision.model) &&
+          compressed.compressedSize < originalSize * 0.98
+        ) {
           try {
-            await ProcessingJob.findByIdAndUpdate(jobId, {
-              status: 'restoring',
-              progress: 55,
-            });
+            await ProcessingJob.findByIdAndUpdate(jobId, { status: 'restoring', progress: 55 });
             const enhanced = await imageRestorationService.enhance(
               compressed.outputPath,
               decision.model,
@@ -171,10 +149,7 @@ export const videoWorker = new Worker<VideoJobData>(
         const finalSize = sizeOf(processedPath);
         const finalExpiryHours = tierExpiryHours > 0 ? tierExpiryHours : 24;
 
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'uploading',
-          progress: 80,
-        });
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'uploading', progress: 80 });
 
         const uploaded = await r2Service.uploadWithKey(processedPath, {
           prefix: 'processed/',
@@ -183,16 +158,7 @@ export const videoWorker = new Worker<VideoJobData>(
 
         const savingsPercent = savingsService.calculate
           ? savingsService.calculate(originalSize, finalSize)
-          : originalSize > 0
-            ? Math.max(
-                0,
-                Math.round((1 - finalSize / originalSize) * 1000) / 10
-              )
-            : 0;
-
-        const expiresAt = new Date(
-          Date.now() + finalExpiryHours * 60 * 60 * 1000
-        );
+          : originalSize > 0 ? Math.max(0, Math.round((1 - finalSize / originalSize) * 1000) / 10) : 0;
 
         await ProcessingJob.findByIdAndUpdate(jobId, {
           mediaKind: 'image',
@@ -205,7 +171,7 @@ export const videoWorker = new Worker<VideoJobData>(
           status: 'completed',
           progress: 100,
           completedAt: new Date(),
-          expiresAt,
+          expiresAt: new Date(Date.now() + finalExpiryHours * 60 * 60 * 1000),
           restored: didRestore,
           restoreMode,
           previewFrameUrls: [],
@@ -214,13 +180,7 @@ export const videoWorker = new Worker<VideoJobData>(
         });
 
         for (const t of temps) safeUnlink(t);
-        if (r2Key) {
-          try {
-            await r2Service.deleteObject(r2Key);
-          } catch {
-            /* ignore */
-          }
-        }
+        if (r2Key) { try { await r2Service.deleteObject(r2Key); } catch {} }
         return;
       }
 
@@ -228,25 +188,14 @@ export const videoWorker = new Worker<VideoJobData>(
       let compressedSize = 0;
 
       const canResumeRestore =
-        (resumeFrom === 'restore' || skipCompress) &&
-        Boolean(persistedCompressedKey);
+        (resumeFrom === 'restore' || skipCompress) && Boolean(persistedCompressedKey);
 
       if (canResumeRestore && persistedCompressedKey) {
         const stillThere = await r2Service.exists(persistedCompressedKey);
-        if (!stillThere) {
-          throw new Error('Compressed checkpoint expired — full re-upload required');
-        }
+        if (!stillThere) throw new Error('Compressed checkpoint expired — full re-upload required');
 
-        console.log(
-          '[worker] resume from restore',
-          jobId,
-          persistedCompressedKey
-        );
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'restoring',
-          progress: 40,
-          error: null,
-        });
+        console.log('[worker] resume from restore', jobId, persistedCompressedKey);
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'restoring', progress: 40, error: null });
 
         fs.mkdirSync(UPLOAD_TEMP_DIR, { recursive: true });
         compressedPath = path.join(
@@ -257,44 +206,33 @@ export const videoWorker = new Worker<VideoJobData>(
         temps.push(compressedPath);
         processedPath = compressedPath;
         codec = clientCodec || (existing as any).codec || 'libsvtav1';
-        compressedSize =
-          clientCompressedSize ||
-          (existing as any).compressedSize ||
-          sizeOf(compressedPath);
+        compressedSize = clientCompressedSize || (existing as any).compressedSize || sizeOf(compressedPath);
       } else if (skipCompress && filePath) {
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'routing',
-          progress: 35,
-        });
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'routing', progress: 35 });
         compressedPath = filePath;
         processedPath = compressedPath;
         codec = clientCodec || 'libvpx-vp9';
         compressedSize = clientCompressedSize ?? sizeOf(compressedPath);
       } else {
-        if (!filePath || !fs.existsSync(filePath)) {
-          throw new Error('Missing input file for compress');
-        }
+        if (!filePath || !fs.existsSync(filePath)) throw new Error('Missing input file for compress');
 
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'compressing',
-          progress: 15,
-        });
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'compressing', progress: 15 });
 
         const compressedResult = await compressionService.compress(filePath, {
           tier,
-          forceVp9: Boolean(forceVp9),
+          forceVp9: Boolean(forceVp9) || tier === 'demo',
         });
         compressedPath = compressedResult.outputPath;
         processedPath = compressedPath;
         codec = compressedResult.codec || '';
-        compressedSize =
-          compressedResult.compressedSize ?? sizeOf(compressedPath);
-        temps.push(compressedPath);
+        compressedSize = compressedResult.compressedSize ?? sizeOf(compressedPath);
+        if (compressedPath !== filePath) temps.push(compressedPath);
 
+        // Stage checkpoint — 9 hours
         try {
           const up = await r2Service.uploadWithKey(compressedPath, {
             prefix: 'compressed/',
-            expiryHours: SHORT_LIVED_HOURS,
+            expiryHours: STAGE_EXPIRY_HOURS,
           });
           persistedCompressedKey = up.key;
           await ProcessingJob.findByIdAndUpdate(jobId, {
@@ -324,52 +262,38 @@ export const videoWorker = new Worker<VideoJobData>(
         return;
       }
 
-      const user = userId
-        ? { id: userId, tier, preferredModel }
-        : preferredModel
-          ? { preferredModel }
-          : null;
-
+      const user = userId ? { id: userId, tier, preferredModel } : preferredModel ? { preferredModel } : null;
       const decision = await routingService.decide(
         { originalSize, size: compressedSize },
         deviceProfile,
         user
       );
 
-      const finalExpiryHours =
-        tierExpiryHours > 0
-          ? tierExpiryHours
-          : decision.expiryHours > 0
-            ? decision.expiryHours
-            : 24;
+      // Completed result + savings card lifetime
+      const finalExpiryHours = tierExpiryHours > 0 ? tierExpiryHours : 24;
+
+      // Model access — only BHI, Real Web Photo RGT-S, DAT2
+      let model: string | null = decision.model || null;
+      if (model && !modelAllowed(tier, model)) model = offering.defaultModel;
+      if (!model || !modelAllowed(tier, model)) model = null;
 
       let modelUsed: string = COMPRESSION_ONLY;
       let restoreSkippedReason: string | null = decision.reason || null;
-      const model = decision.model;
 
       if (model) {
-        await ProcessingJob.findByIdAndUpdate(jobId, {
-          status: 'restoring',
-          progress: 55,
-        });
+        await ProcessingJob.findByIdAndUpdate(jobId, { status: 'restoring', progress: 55 });
 
         try {
           const savingsPercentForGate = savingsService.calculate
             ? savingsService.calculate(originalSize, compressedSize)
-            : originalSize > 0
-              ? Math.max(0, Math.round((1 - compressedSize / originalSize) * 1000) / 10)
-              : 0;
+            : originalSize > 0 ? Math.max(0, Math.round((1 - compressedSize / originalSize) * 1000) / 10) : 0;
 
-          const fullPath = await restorationService.restore(
-            compressedPath,
-            model,
-            {
-              maxWidth: tier === 'demo' ? 960 : 1920,
-              savingsPercent: savingsPercentForGate,
-              tier,
-            }
-          );
-          temps.push(fullPath);
+          const fullPath = await restorationService.restore(compressedPath, model, {
+            maxWidth: offering.maxWidth,
+            savingsPercent: savingsPercentForGate,
+            tier,
+          });
+          if (fullPath !== compressedPath) temps.push(fullPath);
           const fullSize = sizeOf(fullPath);
 
           if (fullSize > 0 && fullSize <= originalSize) {
@@ -380,7 +304,7 @@ export const videoWorker = new Worker<VideoJobData>(
             restoreSkippedReason = null;
           } else {
             restoreSkippedReason = `Full restore ${fullSize}B > original ${originalSize}B — kept compressed`;
-            safeUnlink(fullPath);
+            if (fullPath !== compressedPath) safeUnlink(fullPath);
             processedPath = compressedPath;
           }
         } catch (e: any) {
@@ -390,22 +314,34 @@ export const videoWorker = new Worker<VideoJobData>(
         }
       }
 
+      // ========== HARD SIZE GATE ==========
       let finalSize = sizeOf(processedPath);
-      if (finalSize > originalSize) {
-        processedPath = compressedPath;
-        finalSize = sizeOf(compressedPath);
-        modelUsed = COMPRESSION_ONLY;
-        didRestore = false;
-        restoreMode = 'none';
-        restoreSkippedReason =
-          (restoreSkippedReason || '') + ' | forced compressed (size gate)';
+
+      if (offering.enforceSizeGate && finalSize > originalSize) {
+        const compressedOnlySize = sizeOf(compressedPath);
+        if (compressedOnlySize > 0 && compressedOnlySize <= originalSize) {
+          processedPath = compressedPath;
+          finalSize = compressedOnlySize;
+          modelUsed = COMPRESSION_ONLY;
+          didRestore = false;
+          restoreMode = 'none';
+          restoreSkippedReason = (restoreSkippedReason || '') + ' | size gate: kept compressed';
+        } else {
+          console.warn(
+            `[worker] size gate: compressed ${compressedOnlySize} and candidate ${finalSize} both > original ${originalSize} — returning original`
+          );
+          processedPath = originalPath;
+          finalSize = originalSize;
+          modelUsed = 'original';
+          didRestore = false;
+          restoreMode = 'none';
+          restoreSkippedReason = 'Size gate: re-encode increased size — returned original';
+        }
       }
 
-      await ProcessingJob.findByIdAndUpdate(jobId, {
-        status: 'uploading',
-        progress: 80,
-      });
+      await ProcessingJob.findByIdAndUpdate(jobId, { status: 'uploading', progress: 80 });
 
+      // Completed result — tier expiry (24 / 72 / 168 / keep)
       const uploaded = await r2Service.uploadWithKey(processedPath, {
         prefix: 'processed/',
         expiryHours: finalExpiryHours > 0 ? finalExpiryHours : 168,
@@ -416,15 +352,10 @@ export const videoWorker = new Worker<VideoJobData>(
 
       const savingsPercent = savingsService.calculate
         ? savingsService.calculate(originalSize, finalSize)
-        : originalSize > 0
-          ? Math.max(
-              0,
-              Math.round((1 - finalSize / originalSize) * 1000) / 10
-            )
-          : 0;
+        : originalSize > 0 ? Math.max(0, Math.round((1 - finalSize / originalSize) * 1000) / 10) : 0;
 
       console.log(
-        `[worker] done job=${jobId} tier=${tier} expiryH=${finalExpiryHours} in=${(originalSize / 1024 / 1024).toFixed(1)}MB out=${(finalSize / 1024 / 1024).toFixed(1)}MB saved=${savingsPercent}% mode=${restoreMode}`
+        `[worker] done job=${jobId} tier=${tier} expiryH=${finalExpiryHours} in=${(originalSize / 1024 / 1024).toFixed(1)}MB out=${(finalSize / 1024 / 1024).toFixed(1)}MB saved=${savingsPercent}% mode=${restoreMode} model=${modelUsed}`
       );
 
       let vmafScore: number | null = null;
@@ -436,14 +367,8 @@ export const videoWorker = new Worker<VideoJobData>(
         fs.existsSync(originalPath)
       ) {
         try {
-          const metrics = await qualityMetricsService.runVMAF(
-            originalPath,
-            processedPath
-          );
-          vmafScore =
-            typeof metrics?.vmafScore === 'number' && metrics.vmafScore > 0
-              ? metrics.vmafScore
-              : null;
+          const metrics = await qualityMetricsService.runVMAF(originalPath, processedPath);
+          vmafScore = typeof metrics?.vmafScore === 'number' && metrics.vmafScore > 0 ? metrics.vmafScore : null;
         } catch (e: any) {
           console.warn('[worker] VMAF', e?.message);
         }
@@ -473,7 +398,7 @@ export const videoWorker = new Worker<VideoJobData>(
         status: 'completed',
         progress: 100,
         completedAt: new Date(),
-        expiresAt,
+        expiresAt,                 // drives savings card lifetime
         restored: didRestore,
         restoreMode,
         codec,
@@ -485,9 +410,7 @@ export const videoWorker = new Worker<VideoJobData>(
       for (const t of temps) safeUnlink(t);
 
       if (r2Key) {
-        try {
-          await r2Service.deleteObject(r2Key);
-        } catch (e: any) {
+        try { await r2Service.deleteObject(r2Key); } catch (e: any) {
           console.warn('[worker] r2 delete source', e?.message);
         }
       }
@@ -498,22 +421,16 @@ export const videoWorker = new Worker<VideoJobData>(
         await ProcessingJob.findByIdAndUpdate(jobId, {
           status: 'failed',
           error: error?.message || 'Processing failed',
-          ...(persistedCompressedKey
-            ? { compressedKey: persistedCompressedKey }
-            : {}),
+          ...(persistedCompressedKey ? { compressedKey: persistedCompressedKey } : {}),
         });
       }
       for (const t of temps) safeUnlink(t);
-
       try {
-        const keys = r2KeysOnFail.filter(
-          (k) => k && k !== persistedCompressedKey
-        );
+        const keys = r2KeysOnFail.filter((k) => k && k !== persistedCompressedKey);
         await r2Service.deleteMany(keys);
       } catch (e: any) {
         console.warn('[worker] r2 cleanup on fail', e?.message);
       }
-
       throw error;
     }
   },
